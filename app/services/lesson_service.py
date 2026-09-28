@@ -6,12 +6,17 @@ UI 只拿结果。本模块**不导入 Qt**。
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass, field
 from datetime import datetime
+import shutil
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
-from ..core.paths import atomic_write_json, read_json, read_text
-from ..llm.stream import iter_ndjson
+from ..core.paths import append_jsonl, atomic_write_json, atomic_write_text, read_json, read_text
+from ..llm.stream import BlockStreamParser, iter_ndjson, parse_blocks
 
 STATUS_NOT_STARTED = "not_started"
 STATUS_IN_PROGRESS = "in_progress"
@@ -248,3 +253,213 @@ def sync_course_progress(course_dir: str | Path) -> dict:
     progress.setdefault("review_queue", [])
     atomic_write_json(progress_path, progress)
     return progress
+# --- 讲义生成（§4.3 / §4.4 流式 + §3.11 逐块增量落盘） --------------------
+@dataclass
+class GenerationOutcome:
+    blocks: list[dict]
+    missing_knowledge_points: list[str] = field(default_factory=list)
+    protocol_broken: bool = False
+    fallback_markdown: str = ""
+    tokens: int = 0
+
+    @property
+    def coverage_ok(self) -> bool:
+        return not self.missing_knowledge_points
+
+
+def render_script_markdown(lesson: dict, blocks: Sequence[dict]) -> str:
+    """由内容块生成人读版 ``script.md``（§3.4：md 与 blocks 同源）。"""
+    title = str(lesson.get("title") or "")
+    header = f"# {title}\n\n" if title else ""
+    return header + blocks_to_markdown(list(blocks))
+
+
+def append_block(lesson_dir: str | Path, block: dict) -> None:
+    """每完成一个块就追加到 ``script.blocks.jsonl`` 并重写 ``script.md``（§3.11）。"""
+    directory = Path(lesson_dir)
+    append_jsonl(directory / "script.blocks.jsonl", block)
+    lesson = read_json(directory / "lesson.json", default={}) or {}
+    blocks = [json.loads(line) for line in (read_text(directory / "script.blocks.jsonl")).splitlines() if line.strip()]
+    atomic_write_text(directory / "script.md", render_script_markdown(lesson, blocks))
+
+
+async def generate_script(
+    lesson_dir: str | Path,
+    *,
+    teacher: Any,
+    context: Mapping[str, Any],
+    persona_body: str | None = None,
+    depth: str = "standard",
+    cancel: Any = None,
+    executor: Any = None,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+    lesson_id: str | None = None,
+    course_id: str | None = None,
+    model: str | None = None,
+    revision_reason: str = "",
+    coverage_rounds: int = 1,
+    on_block: Callable[[dict], None] | None = None,
+) -> GenerationOutcome:
+    """生成讲义：流式解析 → 逐块落盘 → 覆盖率自检（必要时补全一轮）→ 版本自增。"""
+    from ..agents.teacher import TeacherAgent
+
+    directory = Path(lesson_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    blocks_path = directory / "script.blocks.jsonl"
+    if revision_reason:
+        _archive_current_version(directory)
+    atomic_write_text(blocks_path, "")
+
+    parser = BlockStreamParser()
+    blocks: list[dict] = []
+
+    async def consume(**extra: Any) -> None:
+        async for piece in teacher.teach(
+            {**dict(context), **extra},
+            cancel=cancel,
+            executor=executor,
+            tools=tools,
+            persona_body=persona_body,
+            depth=depth,
+            model=model,
+            lesson_id=lesson_id,
+            course_id=course_id,
+        ):
+            for block in parser.feed(piece):
+                blocks.append(block)
+                append_block(directory, block)
+                if on_block is not None:
+                    on_block(block)
+        for block in parser.finish():
+            blocks.append(block)
+            append_block(directory, block)
+
+    await consume()
+
+    outcome = GenerationOutcome(blocks=blocks, protocol_broken=parser.protocol_broken)
+    knowledge_points = list(context.get("knowledge_points") or [])
+
+    if parser.protocol_broken:
+        outcome.fallback_markdown = parser.fallback_markdown()
+        atomic_write_text(
+            directory / "script.md",
+            "# （协议错乱，已按整段 Markdown 渲染）\n\n" + outcome.fallback_markdown,
+        )
+    elif knowledge_points:
+        missing = TeacherAgent.coverage_issues(blocks, knowledge_points)
+        while missing and coverage_rounds > 0:
+            coverage_rounds -= 1
+            titles = "、".join(str(point.get("title") or point.get("id")) for point in knowledge_points if str(point.get("id")) in missing or str(point.get("title")) in missing)
+            parser = BlockStreamParser()
+            await consume(
+                coverage_note=f"上一轮漏讲了这些知识点：{titles}。请只补充这几点的讲解（NDJSON，继续用同一协议），不要重复已讲内容。"
+            )
+            blocks.extend(parser.feed(""))
+            missing = TeacherAgent.coverage_issues(blocks, knowledge_points)
+        outcome.missing_knowledge_points = missing
+
+    _bump_version(directory, model=model or "", reason=revision_reason or "首次生成", depth=depth)
+    outcome.tokens = sum(len(str(block)) for block in blocks) // 4  # 粗略估计：端点未回报真实 token
+    atomic_write_text(directory / "script.md", render_script_markdown(read_json(directory / "lesson.json", default={}) or {}, blocks))
+    return outcome
+
+
+def _archive_current_version(lesson_dir: Path) -> None:
+    """重讲前把当前版本归档到 ``history/``（§3.3、AC-22：旧版本不丢）。"""
+    script = lesson_dir / "script.md"
+    blocks = lesson_dir / "script.blocks.jsonl"
+    if not script.exists() and not blocks.exists():
+        return
+    lesson = read_json(lesson_dir / "lesson.json", default={}) or {}
+    version = int(lesson.get("current_version") or 1)
+    history = lesson_dir / "history"
+    history.mkdir(parents=True, exist_ok=True)
+    if script.exists():
+        shutil.copy2(script, history / f"v{version}.md")
+    if blocks.exists():
+        shutil.copy2(blocks, history / f"v{version}.blocks.jsonl")
+
+
+def _bump_version(lesson_dir: Path, *, model: str, reason: str, depth: str) -> dict:
+    from ..core.models import LessonVersion
+    from ..infra import file_repository
+
+    path = lesson_dir / "lesson.json"
+    lesson = read_json(path, default={}) or {}
+    if not lesson:
+        raise FileNotFoundError(f"缺少 lesson.json：{lesson_dir}")
+    current = int(lesson.get("current_version") or 0)
+    next_version = current + 1
+    versions = list(lesson.get("versions") or [])
+    versions.append(LessonVersion(version=next_version, model=model, reason=reason).model_dump(mode="json"))
+    lesson.update(
+        {
+            "current_version": next_version,
+            "versions": versions,
+            "depth": depth,
+            "status": STATUS_IN_PROGRESS,
+            "started_at": lesson.get("started_at") or now_iso(),
+        }
+    )
+    file_repository.write_json(path, lesson)
+    return lesson
+
+
+# --- 追问（§3.6 chat.jsonl 追加写） ---------------------------------------
+def append_chat_turn(lesson_dir: str | Path, record: dict) -> Path:
+    directory = Path(lesson_dir)
+    record = {"ts": now_iso(), **record}
+    return append_jsonl(directory / "chat.jsonl", record)
+
+
+def load_chat(lesson_dir: str | Path) -> list[dict]:
+    path = Path(lesson_dir) / "chat.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in read_text(path).splitlines() if line.strip()]
+
+
+async def ask_question(
+    lesson_dir: str | Path,
+    *,
+    teacher: Any,
+    question: str,
+    context: Mapping[str, Any],
+    selection: str = "",
+    persona_body: str | None = None,
+    depth: str = "standard",
+    cancel: Any = None,
+    executor: Any = None,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+    lesson_id: str | None = None,
+    course_id: str | None = None,
+) -> AsyncIterator[str]:
+    """小节内追问：携带小节上下文与选中片段，回答流式产出并追加写 ``chat.jsonl``。"""
+    directory = Path(lesson_dir)
+    append_chat_turn(
+        directory,
+        {"role": "user", "text": question, "selection": selection or None},
+    )
+    collected: list[str] = []
+    prompt = f"学生的追问：{question}\n"
+    if selection:
+        prompt += f"他选中的讲义片段：{selection}\n"
+    prompt += "请用 NDJSON 回答（可以先 text 块，最后 done 块），不要重复整节课。"
+    async for piece in teacher.teach(
+        {**dict(context), "ask": prompt},
+        cancel=cancel,
+        executor=executor,
+        tools=tools,
+        persona_body=persona_body,
+        depth=depth,
+        lesson_id=lesson_id,
+        course_id=course_id,
+    ):
+        collected.append(piece)
+        yield piece
+    text = "".join(collected)
+    blocks, _ = parse_blocks(text)
+    append_chat_turn(
+        directory,
+        {"role": "assistant", "blocks": len(blocks), "tokens": len(text) // 4, "md": text},
+    )

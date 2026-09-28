@@ -87,7 +87,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.library_page = LibraryPage(result.layout.courses, service=self._services.library)
         self.wizard_page = WizardPage(self._services.outline, thread_pool=self._pool)
-        self.study_page = study_page if study_page is not None else StudyPage(thread_pool=self._pool)
+        self.study_page = study_page if study_page is not None else StudyPage(services=self._services, thread_pool=self._pool)
         self.settings_page = SettingsPage(self._services.settings, thread_pool=self._pool)
         for page in (self.library_page, self.wizard_page, self.study_page, self.settings_page):
             self.stack.addWidget(page)
@@ -235,7 +235,11 @@ class MainWindow(QMainWindow):
         if lesson is None or lesson.get("path") is None:
             self.statusBar().showMessage(f"《{summary.name}》还没有可读的小节，先去生成讲义。", 8000)
             return
-        self.study_page.load_lesson(Path(lesson["path"]))
+        opener = getattr(self.study_page, "open_course", None)
+        if callable(opener):
+            opener(summary.path, lesson["path"])
+        else:  # 兼容只实现了 load_lesson 的渲染替身
+            self.study_page.load_lesson(Path(lesson["path"]))
         self.nav.setCurrentRow(self.NAV_STUDY)
 
     @Slot(str)

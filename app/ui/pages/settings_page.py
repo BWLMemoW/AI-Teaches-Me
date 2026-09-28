@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...core.config import LLMProfile
+from ...core.config import SEARCH_BACKENDS, LLMProfile
 from ...llm.client import ConnectionReport
 from ...services.settings_service import SettingsService
 from ..theme.presets import theme_choices
@@ -67,6 +67,7 @@ class SettingsPage(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_provider_group())
         layout.addWidget(self._build_appearance_group())
+        layout.addWidget(self._build_search_group())
         layout.addWidget(self._build_result_group())
         layout.addStretch(1)
 
@@ -170,6 +171,98 @@ class SettingsPage(QWidget):
         self.font_size_spin.valueChanged.connect(self._on_appearance_toggled)
         form.addRow("正文字号", self.font_size_spin)
         return group
+
+    def _build_search_group(self) -> QGroupBox:
+        """联网与时效（FR-19：默认关闭 + 后端可插拔 + 每日预算）。"""
+        group = QGroupBox("联网与时效")
+        form = QFormLayout(group)
+
+        self.search_enabled_check = QCheckBox("启用联网搜索（默认关闭）")
+        self.search_enabled_check.toggled.connect(self._on_save_search)
+        form.addRow("", self.search_enabled_check)
+
+        self.search_backend_combo = QComboBox()
+        for backend in SEARCH_BACKENDS:
+            self.search_backend_combo.addItem(backend, backend)
+        self.search_backend_combo.currentIndexChanged.connect(self._on_save_search)
+        form.addRow("后端", self.search_backend_combo)
+
+        self.search_url_edit = QLineEdit()
+        self.search_url_edit.editingFinished.connect(self._on_save_search)
+        form.addRow("端点", self.search_url_edit)
+
+        self.search_model_edit = QLineEdit()
+        self.search_model_edit.editingFinished.connect(self._on_save_search)
+        form.addRow("模型", self.search_model_edit)
+
+        self.search_topk_spin = QSpinBox()
+        self.search_topk_spin.setRange(1, 10)
+        self.search_topk_spin.valueChanged.connect(self._on_save_search)
+        form.addRow("结果条数", self.search_topk_spin)
+
+        self.search_budget_spin = QSpinBox()
+        self.search_budget_spin.setRange(0, 10000)
+        self.search_budget_spin.valueChanged.connect(self._on_save_search)
+        form.addRow("每日预算（次）", self.search_budget_spin)
+
+        key_row = QHBoxLayout()
+        self.search_key_edit = QLineEdit()
+        self.search_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.search_key_edit.setPlaceholderText("留空表示不修改已保存的密钥")
+        key_row.addWidget(self.search_key_edit, 1)
+        self.search_key_button = QPushButton("保存搜索密钥")
+        self.search_key_button.clicked.connect(self._on_save_search_key)
+        key_row.addWidget(self.search_key_button)
+        form.addRow("搜索 API Key", key_row)
+        self._load_search_settings()
+        return group
+
+    def _load_search_settings(self) -> None:
+        model = self._service.config.searching_model
+        self.search_enabled_check.blockSignals(True)
+        self.search_enabled_check.setChecked(bool(model.enabled))
+        self.search_enabled_check.blockSignals(False)
+        index = self.search_backend_combo.findData(model.backend)
+        self.search_backend_combo.blockSignals(True)
+        self.search_backend_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.search_backend_combo.blockSignals(False)
+        self.search_url_edit.setText(model.url)
+        self.search_model_edit.setText(model.default_model)
+        self.search_topk_spin.blockSignals(True)
+        self.search_topk_spin.setValue(int(model.top_k))
+        self.search_topk_spin.blockSignals(False)
+        self.search_budget_spin.blockSignals(True)
+        self.search_budget_spin.setValue(int(model.daily_call_budget))
+        self.search_budget_spin.blockSignals(False)
+
+    @Slot()
+    def _on_save_search(self) -> None:
+        model = self._service.config.searching_model
+        model.enabled = bool(self.search_enabled_check.isChecked())
+        model.backend = str(self.search_backend_combo.currentData() or "qianfan")
+        model.url = self.search_url_edit.text().strip() or model.url
+        model.default_model = self.search_model_edit.text().strip() or model.default_model
+        model.top_k = int(self.search_topk_spin.value())
+        model.daily_call_budget = int(self.search_budget_spin.value())
+        self._service.save()
+        self.status_message.emit(
+            f"联网设置已保存（{'开启' if model.enabled else '关闭'} · {model.backend} · 每日 {model.daily_call_budget} 次）"
+        )
+
+    @Slot()
+    def _on_save_search_key(self) -> None:
+        value = self.search_key_edit.text().strip()
+        if not value:
+            self.status_message.emit("请输入搜索 API Key")
+            return
+        model = self._service.config.searching_model
+        ref = model.api_key_ref or "atm/qianfan-search"
+        self._service.store.set_secret(ref, value)
+        model.api_key = ""
+        model.api_key_ref = ref
+        self._service.save()
+        self.search_key_edit.clear()
+        self.status_message.emit(f"搜索密钥已写入系统凭据库（{self._service.store.masked(ref)}）")
 
     def _build_result_group(self) -> QGroupBox:
         group = QGroupBox("连接测试结果")

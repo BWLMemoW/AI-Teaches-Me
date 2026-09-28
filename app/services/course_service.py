@@ -152,3 +152,91 @@ def find_course(courses_dir: str | Path, key: str) -> CourseSummary | None:
         if key in (summary.id, summary.name):
             return summary
     return None
+
+# --- 课程操作（FR-04：重命名 / 删除 / 标记完成 / 收藏 / 排序） -------------
+def now_iso() -> str:
+    from datetime import datetime
+
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def update_course_meta(course_dir: str | Path, **changes: object) -> dict:
+    """更新 ``course.json``（原子写）。"""
+    from ..infra import file_repository
+
+    path = Path(course_dir) / "course.json"
+    meta = read_json(path, default={}) or {}
+    meta.update({key: value for key, value in changes.items() if value is not None})
+    meta["updated_at"] = now_iso()
+    file_repository.write_json(path, meta)
+    return meta
+
+
+def rename_course(course_dir: str | Path, new_name: str, *, index: object | None = None) -> Path:
+    """重命名课程：目录 + course.json + 索引同步；失败自动回滚（AC-64）。"""
+    from ..core.paths import safe_component
+    from ..infra import file_repository
+
+    source = Path(course_dir)
+    target = source.parent / safe_component(new_name)
+    if target.exists() and target != source:
+        _, target = file_repository.unique_course_dir(source.parent, target.name)
+    original_meta = read_json(source / "course.json", default={}) or {}
+
+    source.rename(target)
+    try:
+        update_course_meta(target, name=target.name)
+    except Exception:
+        target.rename(source)
+        file_repository.write_json(source / "course.json", original_meta)
+        raise
+
+    if index is not None and hasattr(index, "upsert_course"):
+        index.upsert_course(
+            course_id=str(original_meta.get("id") or target.name),
+            name=target.name,
+            path=str(target),
+            description=str(original_meta.get("description") or ""),
+        )
+    return target
+
+
+def delete_course(course_dir: str | Path, *, index: object | None = None) -> bool:
+    """删除课程（走回收站，AC-15）。"""
+    from ..infra import file_repository
+
+    target = Path(course_dir)
+    meta = read_json(target / "course.json", default={}) or {}
+    ok = file_repository.delete_to_recycle_bin(target)
+    if ok and index is not None and hasattr(index, "delete_course"):
+        index.delete_course(str(meta.get("id") or target.name))
+    return ok
+
+
+def mark_course_complete(course_dir: str | Path, *, completed: bool = True) -> dict:
+    """整门课程标记完成 / 取消完成：只改状态，不删内容（AC-63）。"""
+    from . import lesson_service
+
+    status = lesson_service.STATUS_COMPLETED if completed else lesson_service.STATUS_IN_PROGRESS
+    for lesson_dir in lesson_service.iter_lesson_dirs(course_dir):
+        lesson_service.set_lesson_status(lesson_dir, status)
+    return lesson_service.sync_course_progress(course_dir)
+
+
+def toggle_favorite(lesson_dir: str | Path, value: bool | None = None) -> bool:
+    """收藏标记（§18.6：``lesson.favorite`` 是标记，不是状态）。"""
+    from ..infra import file_repository
+
+    path = Path(lesson_dir) / "lesson.json"
+    lesson = read_json(path, default={}) or {}
+    lesson["favorite"] = bool(lesson.get("favorite")) if value is None else bool(value)
+    file_repository.write_json(path, lesson)
+    return bool(lesson["favorite"])
+
+
+def set_pinned(course_dir: str | Path, pinned: bool) -> dict:
+    return update_course_meta(course_dir, pinned=bool(pinned))
+
+
+def set_sort_index(course_dir: str | Path, index_value: int) -> dict:
+    return update_course_meta(course_dir, sort_index=int(index_value))

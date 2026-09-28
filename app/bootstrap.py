@@ -247,3 +247,64 @@ def bootstrap_workspace(
         read_only=read_only,
         needs_api_setup=needs_api_setup(config, store=secrets, env=env),
     )
+
+# --- 依赖注入（《项目文档》§12：bootstrap 负责依赖注入） --------------------
+@dataclass
+class Services:
+    """应用服务容器：UI 只拿这个，不自己 new 服务。"""
+
+    result: BootstrapResult
+    index: object
+    client: object
+    settings: object
+    library: object
+    outline: object
+    course: object
+    lesson: object
+
+    @property
+    def layout(self) -> WorkspaceLayout:
+        return self.result.layout
+
+    @property
+    def config(self) -> AppConfig:
+        return self.result.config
+
+
+def build_services(bootstrap_result: BootstrapResult, *, store: SecretStore | None = None) -> Services:
+    """装配索引库 / LLM 客户端 / 各应用服务（依赖方向：UI → services → agents/infra）。"""
+    from .infra.sqlite_index import SqliteIndex
+    from .llm.client import LLMClient
+    from .llm.usage import UsageTracker
+    from .services import course_service, lesson_service
+    from .services.library_service import LibraryService
+    from .services.outline_service import OutlineService
+    from .services.settings_service import SettingsService
+
+    layout = bootstrap_result.layout
+    index = SqliteIndex(layout.db_file)
+    secrets = store if store is not None else SecretStore()
+
+    def _usage_sink(record: object) -> None:
+        index.log_usage(
+            ts=str(getattr(record, "ts", "")),
+            course_id=getattr(record, "course_id", None),
+            lesson_id=getattr(record, "lesson_id", None),
+            agent=getattr(record, "agent", None),
+            model=str(getattr(record, "model", "")),
+            prompt_tokens=int(getattr(record, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(record, "completion_tokens", 0) or 0),
+        )
+
+    usage = UsageTracker(sink=_usage_sink)
+    client = LLMClient(bootstrap_result.config, secret_store=secrets, usage=usage)
+    return Services(
+        result=bootstrap_result,
+        index=index,
+        client=client,
+        settings=SettingsService(bootstrap_result.config, workspace_root=layout.root, store=secrets, usage=usage),
+        library=LibraryService(courses_dir=layout.courses, index=index),
+        outline=OutlineService(courses_dir=layout.courses, client=client, index=index),
+        course=course_service,
+        lesson=lesson_service,
+    )

@@ -96,8 +96,9 @@ class LLMClient:
         agent: str | None = None,
         web_search_backend: str | None = None,
         temperature: float | None = None,
+        tool_sink: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
-        """流式对话：逐段产出增量文本。"""
+        """流式对话：逐段产出增量文本；``tool_sink`` 收集模型请求的工具调用（§4.5）。"""
         resolved = self._resolve_profile(task, profile, web_search_backend)
         api_key = self._require_api_key(resolved)
         model_name = model or resolved.chat_model
@@ -117,6 +118,7 @@ class LLMClient:
                     json_schema=json_schema,
                     token=token,
                     temperature=temperature,
+                    tool_sink=tool_sink,
                     course_id=course_id,
                     lesson_id=lesson_id,
                     agent=agent,
@@ -256,6 +258,7 @@ class LLMClient:
         json_schema: Mapping[str, Any] | None,
         token: CancellationToken,
         temperature: float | None,
+        tool_sink: list[dict[str, Any]] | None,
         course_id: str | None,
         lesson_id: str | None,
         agent: str | None,
@@ -286,6 +289,7 @@ class LLMClient:
 
                 loop = asyncio.get_running_loop()
                 cancelled = asyncio.Event()
+                tool_collector = _ToolCallCollector()
                 unsubscribe = token.on_cancel(lambda: loop.call_soon_threadsafe(cancelled.set))
                 if token.cancelled:
                     cancelled.set()
@@ -317,9 +321,12 @@ class LLMClient:
                                 task=task,
                             )
 
+                        tool_collector.feed(chunk)
                         text = _extract_text(chunk)
                         if text:
                             yield text
+                    if tool_sink is not None:
+                        tool_sink.extend(tool_collector.finish())
                 finally:
                     unsubscribe()
         finally:
@@ -334,6 +341,34 @@ class LLMClient:
                     agent=agent,
                     task=task,
                 )
+
+
+class _ToolCallCollector:
+    """把流式分片的 ``tool_calls`` 合并成完整调用（OpenAI 兼容协议按 index 分片下发）。"""
+
+    def __init__(self) -> None:
+        self._by_index: dict[int, dict[str, Any]] = {}
+
+    def feed(self, chunk: Any) -> None:
+        for choice in getattr(chunk, "choices", None) or []:
+            delta = getattr(choice, "delta", None)
+            for call in getattr(delta, "tool_calls", None) or []:
+                index = int(getattr(call, "index", 0) or 0)
+                slot = self._by_index.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                call_id = getattr(call, "id", None)
+                if call_id:
+                    slot["id"] = str(call_id)
+                function = getattr(call, "function", None)
+                if function is not None:
+                    name = getattr(function, "name", None)
+                    if name:
+                        slot["name"] = str(name)
+                    arguments = getattr(function, "arguments", None)
+                    if arguments:
+                        slot["arguments"] += str(arguments)
+
+    def finish(self) -> list[dict[str, Any]]:
+        return [self._by_index[index] for index in sorted(self._by_index)]
 
 
 async def _anext_or_cancel(iterator: AsyncIterator[Any], cancelled: asyncio.Event) -> Any:

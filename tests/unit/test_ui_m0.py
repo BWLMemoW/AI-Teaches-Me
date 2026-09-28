@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QWidget
 
-from app.bootstrap import BootstrapResult, bootstrap_workspace, layout_for
+from app.bootstrap import BootstrapResult, bootstrap_workspace, build_services, layout_for
 from app.core.events import EventBus
 from app.infra.secret_store import InMemoryBackend, SecretStore
 from app.llm.client import ConnectionReport
@@ -273,14 +273,14 @@ def test_study_page_falls_back_to_markdown(qtbot, tmp_path: Path) -> None:
 # --- 主窗口 --------------------------------------------------------------
 def test_main_window_wires_pages_and_theme(qtbot, tmp_path: Path) -> None:
     result = _bootstrap(tmp_path)
-    service = SettingsService(result.config, workspace_root=tmp_path, store=SecretStore(backend=InMemoryBackend()))
+    services = build_services(result, store=SecretStore(backend=InMemoryBackend()))
     renderer = _StubRenderer()
     study = StudyPage(renderer=renderer)
-    window = MainWindow(result, settings_service=service, bus=EventBus(), study_page=study)
+    window = MainWindow(result, services=services, bus=EventBus(), study_page=study)
     qtbot.addWidget(window)
 
-    assert window.stack.count() == 3
-    assert window.nav.count() == 3
+    assert window.stack.count() == 4
+    assert window.nav.count() == 4
     assert "尚未配置" in window.api_label.text()
     assert window.css_vars["--atm-theme"] == "sakura"
 
@@ -298,9 +298,10 @@ def test_main_window_wires_pages_and_theme(qtbot, tmp_path: Path) -> None:
 
 def test_main_window_opens_seed_lesson(qtbot, tmp_path: Path) -> None:
     result = _bootstrap(tmp_path)
+    services = build_services(result, store=SecretStore(backend=InMemoryBackend()))
     renderer = _StubRenderer()
     study = StudyPage(renderer=renderer)
-    window = MainWindow(result, study_page=study)
+    window = MainWindow(result, services=services, study_page=study)
     qtbot.addWidget(window)
 
     summary = course_service.scan_courses(tmp_path / "Courses")[0]

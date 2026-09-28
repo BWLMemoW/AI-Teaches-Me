@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from .bootstrap import BootstrapResult, bootstrap_workspace
+from .bootstrap import BootstrapResult, bootstrap_workspace, build_services
 from .core.events import EventBus
 from .infra.secret_store import SecretStore
 from .services.settings_service import SettingsService
@@ -73,18 +73,18 @@ def run_self_check(args: argparse.Namespace) -> int:
     report["seeded_files"] = len(result.seeded_files)
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
-    service = SettingsService(result.config, workspace_root=result.layout.root)
-    window = MainWindow(result, settings_service=service, bus=EventBus())
+    services = build_services(result)
+    window = MainWindow(result, services=services, bus=EventBus())
     _pump(app, 0.2)
 
     themes_tried: list[str] = []
     for key in THEME_KEYS:
-        service.set_theme(key)
+        services.settings.set_theme(key)
         window.apply_current_theme()
         themes_tried.append(key)
         _pump(app, 0.05)
     report["themes"] = themes_tried
-    service.set_theme(result.config.ui.theme)
+    services.settings.set_theme(result.config.ui.theme)
 
     courses = course_service.scan_courses(result.layout.courses)
     report["courses"] = [item.name for item in courses]
@@ -160,8 +160,8 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName(APP_TITLE)
 
     result = prepare_bootstrap(args)
-    service = SettingsService(result.config, workspace_root=result.layout.root, store=SecretStore())
-    window = MainWindow(result, settings_service=service)
+    services = build_services(result)
+    window = MainWindow(result, services=services)
     window.show()
     return int(app.exec())
 

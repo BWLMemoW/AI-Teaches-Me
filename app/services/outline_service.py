@@ -1,0 +1,256 @@
+"""大纲服务（《技术文档》§4.3、《项目文档》§7.3 关键流程：课程创建）。
+
+服务是事务边界：**草稿 → 澄清 → 生成 → 校验 → 提交落盘**都在这里完成，
+Agent 只负责「读上下文 → 生成」，UI 只负责展示与编辑（§4.2 / §4.3）。
+"""
+
+from __future__ import annotations
+
+import secrets
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from ..agents.director import MIN_CHAPTERS, MIN_LESSONS_PER_CHAPTER, DirectorAgent
+from ..core.models import (
+    CourseMeta,
+    CourseOutline,
+    CourseStats,
+    LessonMeta,
+    LessonProgressEntry,
+    LessonVersion,
+    ProgressMeta,
+    outline_to_markdown,
+)
+from ..core.paths import safe_component
+from ..infra import file_repository
+from ..infra.sqlite_index import SqliteIndex
+
+
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def new_course_id() -> str:
+    return f"course-{datetime.now().strftime('%Y%m%d')}-{secrets.token_hex(2)}"
+
+
+@dataclass
+class OutlineDraft:
+    """向导里的可编辑草稿（尚未落盘）。"""
+
+    name: str
+    course_id: str = field(default_factory=new_course_id)
+    user_outline: str = ""
+    material_summary: str = ""
+    clarify_questions: str = ""
+    clarify_answers: str = ""
+    outline: CourseOutline | None = None
+    theme: str | None = None
+    persona: str | None = None
+    tags: list[str] = field(default_factory=list)
+    llm_profile: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "course_id": self.course_id,
+            "user_outline": self.user_outline,
+            "clarify_answers": self.clarify_answers,
+            "outline": self.outline.model_dump() if self.outline else None,
+            "theme": self.theme,
+            "persona": self.persona,
+            "tags": list(self.tags),
+        }
+
+
+@dataclass
+class CreateResult:
+    course_id: str
+    name: str
+    course_dir: Path
+    outline: CourseOutline
+    files: list[Path] = field(default_factory=list)
+
+
+class OutlineService:
+    def __init__(
+        self,
+        *,
+        courses_dir: str | Path,
+        client: Any,
+        index: SqliteIndex | None = None,
+        director: DirectorAgent | None = None,
+    ) -> None:
+        self.courses_dir = Path(courses_dir)
+        self.client = client
+        self.index = index
+        self.director = director or DirectorAgent(client)
+
+    # --- 草稿 -----------------------------------------------------------
+    def new_draft(
+        self,
+        name: str,
+        *,
+        user_outline: str = "",
+        material_summary: str = "",
+        theme: str | None = None,
+        persona: str | None = None,
+        tags: Sequence[str] = (),
+        llm_profile: str | None = None,
+    ) -> OutlineDraft:
+        """建草稿：课程名**立刻去重**，避免用户在向导里看到冲突（AC-12）。"""
+        clean = safe_component(name)
+        unique_name, _ = file_repository.unique_course_dir(self.courses_dir, clean)
+        return OutlineDraft(
+            name=unique_name,
+            user_outline=user_outline,
+            material_summary=material_summary,
+            theme=theme,
+            persona=persona,
+            tags=[str(tag) for tag in tags],
+            llm_profile=llm_profile,
+        )
+
+    # --- 生成 -----------------------------------------------------------
+    async def ask_clarify(self, draft: OutlineDraft, *, cancel: Any = None) -> AsyncIterator[str]:
+        parts: list[str] = []
+        async for piece in self.director.clarify(
+            course_name=draft.name,
+            user_outline=draft.user_outline,
+            material_summary=draft.material_summary,
+            cancel=cancel,
+        ):
+            parts.append(piece)
+            yield piece
+        draft.clarify_questions = "".join(parts)
+
+    async def generate(self, draft: OutlineDraft, *, cancel: Any = None) -> CourseOutline:
+        outline = await self.director.generate(
+            course_name=draft.name,
+            user_outline=draft.user_outline,
+            material_summary=draft.material_summary,
+            clarify_answers=draft.clarify_answers,
+            cancel=cancel,
+        )
+        outline.course_id = draft.course_id
+        draft.outline = outline
+        return outline
+
+    # --- 校验 -----------------------------------------------------------
+    @staticmethod
+    def validate(outline: CourseOutline) -> list[str]:
+        """结构自检（对应 AC-08 的「结构合理」；返回可展示的中文提示）。"""
+        issues: list[str] = []
+        if not outline.chapters:
+            issues.append("大纲里没有任何章节")
+            return issues
+        if len(outline.chapters) < MIN_CHAPTERS:
+            issues.append(f"章节偏少（当前 {len(outline.chapters)} 章，建议至少 {MIN_CHAPTERS} 章）")
+        for chapter in outline.chapters:
+            if not chapter.lessons:
+                issues.append(f"第 {chapter.id} 章没有小节")
+            elif len(chapter.lessons) < MIN_LESSONS_PER_CHAPTER:
+                issues.append(f"{chapter.id} 小节偏少（当前 {len(chapter.lessons)} 节，建议至少 {MIN_LESSONS_PER_CHAPTER} 节）")
+            for lesson in chapter.lessons:
+                if not lesson.knowledge_points:
+                    issues.append(f"{lesson.id} 没有知识点")
+        seen: set[str] = set()
+        for point in outline.all_knowledge_points():
+            if point.id in seen:
+                issues.append(f"知识点 id 重复：{point.id}")
+            seen.add(point.id)
+        return issues
+
+    # --- 落盘 -----------------------------------------------------------
+    def commit(self, draft: OutlineDraft, outline: CourseOutline | None = None) -> CreateResult:
+        """把大纲写成完整课程骨架（§3.3 目录结构）。"""
+        target_outline = outline or draft.outline
+        if target_outline is None:
+            raise ValueError("还没有大纲可以提交")
+
+        name, course_dir = file_repository.unique_course_dir(self.courses_dir, draft.name)
+        file_repository.ensure_course_dirs(course_dir)
+        target_outline.course_id = draft.course_id
+
+        written: list[Path] = []
+        meta = CourseMeta(
+            id=draft.course_id,
+            name=name,
+            theme=draft.theme,
+            persona=draft.persona,
+            tags=list(draft.tags),
+            llm_profile=draft.llm_profile,
+            stats=CourseStats(
+                chapters=len(target_outline.chapters),
+                lessons=target_outline.total_lessons(),
+                completed_lessons=0,
+                total_minutes=sum(
+                    lesson.estimated_minutes
+                    for chapter in target_outline.chapters
+                    for lesson in chapter.lessons
+                ),
+            ),
+        )
+        written.append(file_repository.write_json(course_dir / "course.json", meta.model_dump(mode="json")))
+        written.append(file_repository.write_json(course_dir / "outline.json", target_outline.model_dump(mode="json")))
+        written.append(file_repository.write_text(course_dir / "outline.md", outline_to_markdown(target_outline)))
+
+        progress = ProgressMeta(course_id=draft.course_id)
+        for chapter in target_outline.chapters:
+            chapter_title = safe_component(f"{chapter.id}-{chapter.title}")
+            chapter_dir = course_dir / "chapters" / chapter_title
+            chapter_dir.mkdir(parents=True, exist_ok=True)
+            written.append(
+                file_repository.write_json(
+                    chapter_dir / "chapter.json",
+                    {
+                        "schema_version": 1,
+                        "id": chapter.id,
+                        "title": chapter.title,
+                        "summary": chapter.summary,
+                        "lesson_order": [lesson.id for lesson in chapter.lessons],
+                    },
+                )
+            )
+            lessons_dir = chapter_dir / "lessons"
+            lessons_dir.mkdir(parents=True, exist_ok=True)
+            for lesson in chapter.lessons:
+                lesson_title = safe_component(f"{lesson.id}-{lesson.title}")
+                lesson_dir = lessons_dir / lesson_title
+                lesson_dir.mkdir(parents=True, exist_ok=True)
+                meta_lesson = LessonMeta(
+                    id=lesson.id,
+                    title=lesson.title,
+                    depth="standard",
+                    versions=[LessonVersion(version=1, model="", reason="待生成")],
+                )
+                meta_lesson.current_version = 0
+                written.append(
+                    file_repository.write_json(lesson_dir / "lesson.json", meta_lesson.model_dump(mode="json"))
+                )
+                written.append(file_repository.write_text(lesson_dir / "notebook.md", f"# {lesson.title} 的笔记\n\n"))
+                progress.lessons[lesson.id] = LessonProgressEntry()
+        written.append(file_repository.write_json(course_dir / "progress.json", progress.model_dump(mode="json")))
+
+        if self.index is not None:
+            self.index.upsert_course(
+                course_id=draft.course_id,
+                name=name,
+                path=str(course_dir),
+                total_lessons=target_outline.total_lessons(),
+                completed_lessons=0,
+                description=meta.description,
+            )
+            tag_ids = [self.index.add_tag(tag) for tag in draft.tags if str(tag).strip()]
+            if tag_ids:
+                self.index.set_course_tags(draft.course_id, tag_ids)
+        return CreateResult(
+            course_id=draft.course_id,
+            name=name,
+            course_dir=course_dir,
+            outline=target_outline,
+            files=written,
+        )

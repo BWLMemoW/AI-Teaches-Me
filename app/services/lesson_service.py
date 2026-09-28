@@ -195,3 +195,56 @@ def _sync_progress(lesson_dir: Path) -> dict:
     progress["completed_lessons"] = len(completed)
     atomic_write_json(progress_path, progress)
     return progress
+
+def iter_lesson_dirs(course_dir: str | Path) -> list[Path]:
+    """课程下所有小节目录（``chapters/*/lessons/*``）。"""
+    root = Path(course_dir) / "chapters"
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    for chapter in sorted(path for path in root.iterdir() if path.is_dir()):
+        lessons = chapter / "lessons"
+        if lessons.is_dir():
+            found.extend(sorted(path for path in lessons.iterdir() if path.is_dir()))
+    return found
+
+
+def set_lesson_status(lesson_dir: str | Path, status: str, *, mastery: int | None = None) -> dict:
+    """直接改小节状态（批量标记用，FR-04 的「标记完成 / 取消完成」）。"""
+    directory = Path(lesson_dir)
+    lesson = read_json(directory / "lesson.json", default={}) or {}
+    if not lesson:
+        raise FileNotFoundError(f"缺少 lesson.json：{directory}")
+    lesson["status"] = status
+    lesson["completed_at"] = (lesson.get("completed_at") or now_iso()) if status == STATUS_COMPLETED else None
+    if mastery is not None:
+        lesson["mastery"] = mastery
+    atomic_write_json(directory / "lesson.json", lesson)
+    return lesson
+
+
+def sync_course_progress(course_dir: str | Path) -> dict:
+    """把课程下所有小节状态汇总进 ``progress.json``（保留已有 review_queue）。"""
+    root = Path(course_dir)
+    progress_path = root / "progress.json"
+    progress = read_json(progress_path, default={}) or {}
+    lessons: dict[str, dict] = {}
+
+    for lesson_dir in iter_lesson_dirs(root):
+        lesson = read_json(lesson_dir / "lesson.json", default={}) or {}
+        lesson_id = str(lesson.get("id") or lesson_dir.name.split("-")[0])
+        lessons[lesson_id] = {
+            "status": lesson.get("status", STATUS_NOT_STARTED),
+            "mastery": lesson.get("mastery"),
+            "quiz_score": lesson.get("quiz_score"),
+            "minutes": int((lesson.get("time_spent_seconds") or 0) // 60),
+        }
+
+    progress["schema_version"] = int(progress.get("schema_version") or 1)
+    progress["lessons"] = lessons
+    progress["total_minutes"] = sum(int(item.get("minutes") or 0) for item in lessons.values())
+    progress["completed_lessons"] = sum(1 for item in lessons.values() if item.get("status") == STATUS_COMPLETED)
+    progress["updated_at"] = now_iso()
+    progress.setdefault("review_queue", [])
+    atomic_write_json(progress_path, progress)
+    return progress

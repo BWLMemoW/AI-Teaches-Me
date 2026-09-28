@@ -261,6 +261,8 @@ class Services:
     outline: object
     course: object
     lesson: object
+    search: object | None = None
+    personas: object | None = None
 
     @property
     def layout(self) -> WorkspaceLayout:
@@ -279,6 +281,8 @@ def build_services(bootstrap_result: BootstrapResult, *, store: SecretStore | No
     from .services import course_service, lesson_service
     from .services.library_service import LibraryService
     from .services.outline_service import OutlineService
+    from .services.persona_service import PersonaService
+    from .services.search_service import SearchService
     from .services.settings_service import SettingsService
 
     layout = bootstrap_result.layout
@@ -298,6 +302,12 @@ def build_services(bootstrap_result: BootstrapResult, *, store: SecretStore | No
 
     usage = UsageTracker(sink=_usage_sink)
     client = LLMClient(bootstrap_result.config, secret_store=secrets, usage=usage)
+    search_model = bootstrap_result.config.searching_model
+    search_service = SearchService(
+        cache_dir=layout.cache,
+        searching_model=search_model,
+        api_key=secrets.get_secret(search_model.api_key_ref) or "",
+    )
     return Services(
         result=bootstrap_result,
         index=index,
@@ -307,4 +317,6 @@ def build_services(bootstrap_result: BootstrapResult, *, store: SecretStore | No
         outline=OutlineService(courses_dir=layout.courses, client=client, index=index),
         course=course_service,
         lesson=lesson_service,
+        search=search_service,
+        personas=PersonaService(user_dir=layout.personas, index=index),
     )

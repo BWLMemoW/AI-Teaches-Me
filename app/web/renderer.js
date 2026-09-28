@@ -14,6 +14,9 @@
   var CALLOUT_ICONS = { hook: "⚡", tip: "💡", warn: "⚠️", question: "❓", fun: "🎈" };
   var CALLOUT_TITLES = { hook: "钩子", tip: "提示", warn: "注意", question: "想一想", fun: "有趣" };
 
+  var LAZY_THRESHOLD = 60;
+  var observer = null;
+
   var state = {
     root: null,
     meta: null,
@@ -176,6 +179,49 @@
   }
 
   /* --- 单个内容块 ---------------------------------------------------- */
+  /* --- 虚拟化与懒挂载（README：>300 块时只挂可视区附近；重块滚动到才渲染） --- */
+  function ensureObserver() {
+    if (observer || typeof IntersectionObserver === "undefined") { return observer; }
+    observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) { return; }
+          var node = entry.target;
+          if (typeof node.atmMount === "function") {
+            var mount = node.atmMount;
+            delete node.atmMount;
+            mount(node);
+          }
+          observer.unobserve(node);
+        });
+      },
+      { rootMargin: "600px 0px" }
+    );
+    return observer;
+  }
+
+  function deferMount(node, mountFn) {
+    node.atmMount = mountFn;
+    var obs = ensureObserver();
+    if (obs) { obs.observe(node); } else { mountFn(node); }
+    return node;
+  }
+
+  function heavyBlockShouldDefer() {
+    return state.blocks >= LAZY_THRESHOLD;
+  }
+
+  /* --- 图片灯箱（点击放大，只对本地图片） --- */
+  function openLightbox(src, alt) {
+    var overlay = document.createElement("div");
+    overlay.className = "atm-lightbox";
+    var image = document.createElement("img");
+    image.setAttribute("src", src);
+    image.setAttribute("alt", alt || "");
+    overlay.appendChild(image);
+    overlay.addEventListener("click", function () { overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
   function renderMeta(block) {
     state.meta = {
       lesson_id: block.lesson_id || null,
@@ -311,6 +357,7 @@
     img.setAttribute("loading", "lazy");
     img.className = "atm-image";
     img.alt = block.caption || "资料图片";
+    img.addEventListener("click", function () { openLightbox(source, block.caption || ""); });
     node.appendChild(img);
     if (block.caption) { node.appendChild(el("div", "atm-placeholder", escapeHtml(block.caption))); }
     return node;
@@ -318,9 +365,19 @@
 
   function renderSvg(block) {
     var node = el("section", "atm-block atm-svg");
-    if (block.svg) { node.innerHTML = stripDangerousMarkup(block.svg); }
     if (block.title) { node.setAttribute("aria-label", String(block.title)); }
     if (block.caption) { node.appendChild(el("div", "atm-placeholder", escapeHtml(block.caption))); }
+    var mount = function (target) {
+      target.classList.remove("atm-deferred");
+      var host = document.createElement("div");
+      host.innerHTML = stripDangerousMarkup(block.svg || "");
+      target.appendChild(host);
+    };
+    if (block.svg && heavyBlockShouldDefer()) {
+      node.classList.add("atm-deferred");
+      return deferMount(node, mount);
+    }
+    mount(node);
     return node;
   }
 
@@ -340,12 +397,21 @@
   function renderAnimation(block) {
     var node = el("section", "atm-block atm-animation");
     if (block.title) { node.appendChild(el("div", "atm-lang", escapeHtml(block.title))); }
-    var frame = document.createElement("iframe");
-    frame.setAttribute("sandbox", "allow-scripts");
-    frame.setAttribute("referrerpolicy", "no-referrer");
-    frame.setAttribute("srcdoc", String(block.html || ""));
-    frame.style.height = String(block.height || 320) + "px";
-    node.appendChild(frame);
+    var mount = function (target) {
+      target.classList.remove("atm-deferred");
+      var frame = document.createElement("iframe");
+      frame.setAttribute("sandbox", "allow-scripts");
+      frame.setAttribute("referrerpolicy", "no-referrer");
+      frame.setAttribute("srcdoc", String(block.html || ""));
+      frame.style.height = String(block.height || 320) + "px";
+      target.appendChild(frame);
+    };
+    if (block.html && heavyBlockShouldDefer()) {
+      node.classList.add("atm-deferred");
+      node.appendChild(el("div", "atm-placeholder", "（动画会在滚动到可视区时挂载）"));
+      return deferMount(node, mount);
+    }
+    mount(node);
     if (block.fallback_md) {
       var fallback = el("div", "atm-placeholder", escapeHtml(block.fallback_md));
       fallback.style.display = "none";
@@ -484,7 +550,7 @@
       vendor: state.vendor,
       theme: document.documentElement.getAttribute("data-theme"),
       mode: document.documentElement.getAttribute("data-mode"),
-      textLength: state.root ? state.root.innerText.length : 0
+      textLength: state.root ? state.root.textContent.length : 0  // textContent：不受 content-visibility 影响
     };
   }
 

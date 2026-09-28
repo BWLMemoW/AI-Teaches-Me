@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...agents.illustrator import AnimatorAgent, IllustratorAgent
+from ...agents.notes import NoteKeeperAgent
 from ...agents.teacher import TeacherAgent
 from ...agents.tools import build_registry
 from ...core.cancel import CancellationToken
@@ -212,6 +214,9 @@ class StudyPage(QWidget):
         self.reteach_button = QPushButton("换种讲法")
         self.reteach_button.clicked.connect(lambda: self.generate_script(revision_reason="换种讲法"))
         bar.addWidget(self.reteach_button)
+        self.latest_button = QPushButton("查最新")
+        self.latest_button.clicked.connect(self.refresh_latest)
+        bar.addWidget(self.latest_button)
         self.stop_button = QPushButton("停止")
         self.stop_button.clicked.connect(self._on_stop)
         bar.addWidget(self.stop_button)
@@ -292,6 +297,7 @@ class StudyPage(QWidget):
         lesson_service.mark_in_progress(self._lesson_dir)
         self.title_label.setText(f"{content.lesson_id} · {content.title}")
         self.status_label.setText("" if not content.issues else "提示：" + "；".join(content.issues))
+        self._loaded_blocks = list(content.blocks)
         if content.has_blocks:
             self._renderer.render_blocks(list(content.blocks))
         elif content.markdown:
@@ -304,8 +310,22 @@ class StudyPage(QWidget):
         self._sync_persona(content)
         self.chat_drawer.load_records(lesson_service.load_chat(self._lesson_dir))
         self._load_context()
+        self._hint_staleness(content)
         self.status_message.emit(f"已打开 {content.lesson_id}")
 
+
+    def _hint_staleness(self, content: lesson_service.LessonContent) -> None:
+        """未开启联网时，对时效敏感内容主动提示（§4.19「未开启时」）。"""
+        from ...services.search_service import SearchService
+
+        service = getattr(self._services, "search", None)
+        if service is None or getattr(service, "enabled", False):
+            return
+        topics = [content.title] + [
+            str(point.get("title") or "") for point in (self._context.get("knowledge_points") or [])
+        ]
+        if any(SearchService.should_trigger(topic) for topic in topics):
+            self.status_label.setText(self.status_label.text() + "  ⚠️ 该内容可能已更新，建议点「查最新」开启联网校验。")
     def apply_theme_vars(self, css_vars: dict) -> None:
         self._css_vars = dict(css_vars or {})
         self._renderer.set_theme(self._css_vars)
@@ -436,18 +456,91 @@ class StudyPage(QWidget):
         self._pool.start(_AsyncGenTask(factory, self._signals))
 
     def _build_tooling(self) -> tuple[ToolExecutor | None, list[dict[str, Any]] | None]:
+        """装配工具：图示 / 动画 / 读图 / 笔记 / 联网 + **人设工具白名单交集**（§10.6）。"""
         if self._services is None or self._lesson_dir is None:
             return None, None
+        client = getattr(self._services, "client", None)
+        persona = self._current_persona()
+        vision = None
+        illustrator = None
+        animator = None
+        notes_agent = None
+        if client is not None:
+            try:
+                supports_vision = bool(self._services.config.require_profile().capabilities.vision)
+            except Exception:  # noqa: BLE001
+                supports_vision = True
+
+            def vision(png: bytes, prompt: str) -> str:
+                return asyncio.run(client.review_image(png, prompt=prompt))
+
+            vision = vision if supports_vision else None
+            illustrator = IllustratorAgent(client, vision=vision)
+            animator = AnimatorAgent(client)
+            notes_agent = NoteKeeperAgent(client)
+
         registry = build_registry(
             outline=(self._context.get("outline") or None),
             course_dir=self._lesson_dir.parents[3],
             lesson_dir=self._lesson_dir,
             index=getattr(self._services, "index", None),
             progress=self._context.get("progress"),
-            client=getattr(self._services, "client", None),
+            client=client,
+            search_service=getattr(self._services, "search", None),
+            illustrator=illustrator,
+            animator=animator,
+            vision=vision,
+            notes_agent=notes_agent,
         )
-        tools = registry.schemas()
+        allowed = persona.tools if (persona is not None and persona.tools) else registry.names()
+        tools = registry.schemas(allowed)
+        if not tools:
+            tools = registry.schemas()
         return ToolExecutor(registry, budget=CallBudget()), tools
+
+    # --- 时效性校验（FR-19 辅助路径：系统预取） --------------------------
+    def refresh_latest(self) -> None:
+        """点「查最新」：检索时效性信息，命中则渲染 ref(web) 卡片（§4.19）。"""
+        service = getattr(self._services, "search", None)
+        if service is None or self._lesson_dir is None:
+            self.status_message.emit("联网搜索不可用")
+            return
+        topic = " ".join(
+            [str((self._context.get("lesson") or {}).get("title") or "")]
+            + [str(point.get("title") or "") for point in (self._context.get("knowledge_points") or [])]
+        ).strip()
+        self._mode = "latest"
+        self.latest_button.setEnabled(False)
+        self.status_label.setText("正在联网校验时效性…")
+
+        def factory():
+            return service.search(topic or "课程内容 最新")
+
+        self._pool.start(_AsyncCallTask(factory, self._signals))
+
+    def _render_latest(self, result: Any) -> None:
+        if getattr(result, "stopped", False):
+            self.status_label.setText(f"未能校验时效性：{getattr(result, 'message', '')}")
+            return
+        blocks: list[dict[str, Any]] = list(getattr(self, "_loaded_blocks", []))
+        for hit in getattr(result, "hits", []):
+            blocks.append(
+                {
+                    "type": "ref",
+                    "url": hit.url,
+                    "title": hit.title,
+                    "domain": hit.domain,
+                    "accessed_at": hit.accessed_at,
+                    "quote": hit.snippet,
+                }
+            )
+        if not blocks:
+            self.status_label.setText("未能校验时效性：没有可用结果")
+            return
+        self._renderer.render_blocks(blocks)
+        self._renderer.set_theme(self._css_vars)
+        suffix = "（命中缓存）" if getattr(result, "cached", False) else ""
+        self.status_label.setText(f"已补充 {len(getattr(result, 'hits', []))} 条网络来源{suffix}，请自行判断时效性")
 
     # --- 交互 -----------------------------------------------------------
     def _new_token(self) -> CancellationToken:
@@ -467,6 +560,11 @@ class StudyPage(QWidget):
     def _on_done(self, payload: object) -> None:
         mode, self._mode = self._mode, ""
         self.generate_button.setEnabled(True)
+        self.latest_button.setEnabled(True)
+        if mode == "latest":
+            self._render_latest(payload)
+            self.status_message.emit("时效性校验完成")
+            return
         if mode == "ask":
             self.chat_drawer.append_assistant_end()
             self.status_message.emit("追问完成（已写入 chat.jsonl）")

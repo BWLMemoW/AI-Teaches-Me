@@ -29,6 +29,8 @@ class LibraryPage(QWidget):
     delete_requested = Signal(object)
     complete_toggled = Signal(object, bool)
     open_in_explorer = Signal(object)
+    backup_requested = Signal(object)
+    restore_requested = Signal()
 
     def __init__(self, courses_dir: str | Path, *, service: LibraryService | None = None, parent=None) -> None:
         super().__init__(parent)
@@ -139,6 +141,12 @@ class LibraryPage(QWidget):
         self.delete_button.setProperty("role", "danger")
         self.delete_button.clicked.connect(lambda: self._emit_selected(self.delete_requested))
         actions.addWidget(self.delete_button)
+        self.backup_button = QPushButton("备份课程")
+        self.backup_button.clicked.connect(lambda: self._emit_selected(self.backup_requested))
+        actions.addWidget(self.backup_button)
+        self.restore_button = QPushButton("恢复备份")
+        self.restore_button.clicked.connect(self.restore_requested.emit)
+        actions.addWidget(self.restore_button)
         actions.addStretch(1)
         layout.addLayout(actions)
         self._update_buttons()
@@ -240,6 +248,7 @@ class LibraryPage(QWidget):
             self.rename_button,
             self.delete_button,
             self.explorer_button,
+            self.backup_button,
             self.add_tag_button,
         ):
             button.setEnabled(has_selection)

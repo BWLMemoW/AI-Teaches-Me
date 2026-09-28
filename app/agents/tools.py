@@ -45,6 +45,10 @@ def build_registry(
     progress: dict[str, Any] | None = None,
     search_service: Any = None,
     client: Any = None,
+    illustrator: Any = None,
+    animator: Any = None,
+    vision: Any = None,
+    notes_agent: Any = None,
 ) -> ToolRegistry:
     """按当前上下文装配可用工具（缺依赖的工具仍注册，但会返回结构化错误）。"""
     from ..infra import file_repository
@@ -174,6 +178,23 @@ def build_registry(
             save_note,
         )
     )
+    def make_notes(lesson_id: str, scope: str = "lesson") -> dict[str, Any]:
+        if notes_agent is None or lesson is None or root is None:
+            return {"error": "当前上下文没有笔记能力"}
+        from ..services import notes_service
+
+        result = notes_service.generate_notes(root, lesson, agent=notes_agent)
+        return {"saved": str(result.path), "generated_by_model": result.generated_by_model}
+
+    registry.register(
+        ToolSpec(
+            "make_notes",
+            "整理小节 / 课程结构化 Markdown 笔记",
+            _fn("make_notes", "整理笔记", {"lesson_id": {"type": "string"}, "scope": {"type": "string"}}, ["lesson_id"]),
+            make_notes,
+            timeout=RENDER_TIMEOUT,
+        )
+    )
     registry.register(
         ToolSpec(
             "make_quiz",
@@ -181,6 +202,125 @@ def build_registry(
             _fn("make_quiz", "基于知识点出题", {"kp": {"type": "string"}, "n": {"type": "integer"}}, ["kp"]),
             make_quiz,
             timeout=RENDER_TIMEOUT,
+        )
+    )
+    def gen_svg(spec: str, title: str = "示意图", caption: str = "") -> dict[str, Any]:
+        """生成并**自检**SVG（内部走 Illustrator 的 Render-and-Review，§8.4.1）。"""
+        if illustrator is None:
+            return {"error": "当前上下文没有图示能力"}
+        import asyncio
+
+        from ..agents.illustrator import SvgSpec
+
+        result = asyncio.run(
+            illustrator.make_svg(SvgSpec(concept=spec, title=title, caption_md=caption, lesson_id=str(lesson or "")))
+        )
+        if not result.ok:
+            return {"ok": False, "fallback_md": result.fallback_md, "issues": result.issues}
+        saved = illustrator.save_asset(lesson, SvgSpec(concept=spec, title=title), result) if lesson else {}
+        return {"ok": True, "svg": result.svg, "rounds": result.rounds, "assets": saved}
+
+    def render_svg(svg: str) -> dict[str, Any]:
+        from ..infra.svg_renderer import render_svg_png
+
+        payload = render_svg_png(svg, width=820)
+        return {"ok": bool(payload), "bytes": len(payload)}
+
+    def review_svg_image(png_base64: str, spec: str = "") -> dict[str, Any]:
+        if vision is None:
+            return {"error": "当前模型不支持读图，已退回启发式检查（T-26b）"}
+        import base64
+
+        try:
+            payload = base64.b64decode(png_base64)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"PNG 解码失败：{exc}"}
+        return {"verdict": vision(payload, spec or "请检查这张示意图是否文字溢出、标注齐全、明暗可读。")}
+
+    def refine_svg(svg: str, feedback: str) -> dict[str, Any]:
+        if illustrator is None:
+            return {"error": "当前上下文没有图示能力"}
+        import asyncio
+
+        from ..agents.illustrator import SvgSpec
+
+        spec = SvgSpec(concept=f"按反馈修改这张图：{feedback}", title="修改稿")
+        result = asyncio.run(illustrator.make_svg(spec))
+        return {"ok": result.ok, "svg": result.svg, "rounds": result.rounds, "issues": result.issues}
+
+    def gen_animation(spec: str, title: str = "微动画") -> dict[str, Any]:
+        if animator is None:
+            return {"error": "当前上下文没有动画能力"}
+        import asyncio
+
+        payload = asyncio.run(animator.make_animation(spec))
+        if payload.get("error"):
+            return {"error": payload["error"], "fallback_md": payload.get("fallback_md", "")}
+        return {"ok": True, "title": title, "html": payload["html"], "problems": payload.get("problems", [])}
+
+    def read_image(path: str, question: str = "") -> dict[str, Any]:
+        if vision is None:
+            return {"error": "当前模型不支持读图"}
+        from ..infra import file_repository
+        from pathlib import Path as _Path
+
+        file_path = _Path(str(path))
+        if not file_path.exists():
+            return {"error": "图片不存在"}
+        return {"answer": vision(file_path.read_bytes(), question or "请描述这张图片里与学习相关的内容。")}
+
+    registry.register(
+        ToolSpec(
+            "gen_svg",
+            "生成并自检 SVG 矢量图示（Render-and-Review，最多 3 轮）",
+            _fn("gen_svg", "生成 SVG 图示", {"spec": {"type": "string"}, "title": {"type": "string"}, "caption": {"type": "string"}}, ["spec"]),
+            gen_svg,
+            timeout=RENDER_TIMEOUT,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "render_svg",
+            "把 SVG 渲染成 PNG（自检图 / 首屏占位图）",
+            _fn("render_svg", "SVG 渲染成 PNG", {"svg": {"type": "string"}}, ["svg"]),
+            render_svg,
+            timeout=RENDER_TIMEOUT,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "review_svg_image",
+            "读图评审渲染结果，产出问题清单",
+            _fn("review_svg_image", "读图评审", {"png_base64": {"type": "string"}, "spec": {"type": "string"}}, ["png_base64"]),
+            review_svg_image,
+            timeout=VISION_TIMEOUT,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "refine_svg",
+            "按反馈重画 / 局部修改 SVG",
+            _fn("refine_svg", "按反馈重画", {"svg": {"type": "string"}, "feedback": {"type": "string"}}, ["svg", "feedback"]),
+            refine_svg,
+            timeout=RENDER_TIMEOUT,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "gen_animation",
+            "生成单文件 HTML 微动画（沙箱禁网 + 5s 熔断）",
+            _fn("gen_animation", "生成微动画", {"spec": {"type": "string"}, "title": {"type": "string"}}, ["spec"]),
+            gen_animation,
+            timeout=RENDER_TIMEOUT,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "read_image",
+            "多模态读图（资料插图 / 手写笔记）",
+            _fn("read_image", "读图", {"path": {"type": "string"}, "question": {"type": "string"}}, ["path"]),
+            read_image,
+            timeout=VISION_TIMEOUT,
         )
     )
     registry.register(

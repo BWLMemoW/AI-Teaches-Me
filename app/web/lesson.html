@@ -26,7 +26,12 @@
     }
     #atm-root { max-width: var(--atm-reading-width, 820px); margin: 0 auto; padding: 24px 20px 48px; }
     .atm-meta { color: var(--atm-text-muted); font-size: 12px; margin-bottom: 8px; }
-    .atm-block { margin: 0 0 16px; }
+    .atm-block { margin: 0 0 16px; content-visibility: auto; contain-intrinsic-size: 320px; }
+    [data-mode="dark"] .atm-image { filter: brightness(0.85) contrast(1.05); }
+    .atm-image { cursor: zoom-in; max-width: 100%; height: auto; }
+    .atm-lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); display: flex; align-items: center; justify-content: center; z-index: 50; cursor: zoom-out; }
+    .atm-lightbox img { max-width: 92vw; max-height: 92vh; }
+    .atm-block.atm-deferred { opacity: 0.85; }
     .atm-text h1, .atm-text h2, .atm-text h3 { line-height: 1.35; }
     .atm-text h2 { font-size: 1.35em; margin: 1.2em 0 .5em; }
     .atm-text h3 { font-size: 1.15em; margin: 1em 0 .4em; }

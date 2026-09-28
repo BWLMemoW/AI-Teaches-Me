@@ -276,7 +276,7 @@ def test_main_window_wires_pages_and_theme(qtbot, tmp_path: Path) -> None:
     services = build_services(result, store=SecretStore(backend=InMemoryBackend()))
     renderer = _StubRenderer()
     study = StudyPage(renderer=renderer)
-    window = MainWindow(result, services=services, bus=EventBus(), study_page=study)
+    window = MainWindow(result, services=services, bus=EventBus(), study_page=study, show_first_run=False)
     qtbot.addWidget(window)
 
     assert window.stack.count() == 6
@@ -301,7 +301,7 @@ def test_main_window_opens_seed_lesson(qtbot, tmp_path: Path) -> None:
     services = build_services(result, store=SecretStore(backend=InMemoryBackend()))
     renderer = _StubRenderer()
     study = StudyPage(renderer=renderer)
-    window = MainWindow(result, services=services, study_page=study)
+    window = MainWindow(result, services=services, study_page=study, show_first_run=False)
     qtbot.addWidget(window)
 
     summary = course_service.scan_courses(tmp_path / "Courses")[0]

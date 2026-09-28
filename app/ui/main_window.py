@@ -26,6 +26,7 @@ from ..services import course_service
 from .pages.library_page import LibraryPage
 from .pages.notes_page import NotesPage
 from .pages.qa_page import QaPage
+from .widgets.first_run_dialog import FirstRunDialog
 from .pages.settings_page import SettingsPage
 from .pages.study_page import StudyPage
 from .pages.wizard_page import WizardPage
@@ -64,6 +65,7 @@ class MainWindow(QMainWindow):
         bus: EventBus | None = None,
         thread_pool: QThreadPool | None = None,
         study_page: StudyPage | None = None,
+        show_first_run: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -73,6 +75,7 @@ class MainWindow(QMainWindow):
         self._bus = bus if bus is not None else EventBus()
         self._pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         self._css_vars: dict = {}
+        self._first_run_shown = not show_first_run
 
         self.setWindowTitle("AI Teaches Me")
         self.resize(1220, 780)
@@ -124,6 +127,7 @@ class MainWindow(QMainWindow):
         self.refresh_library()
         self.apply_current_theme()
         self.nav.setCurrentRow(self.NAV_COURSES)
+        self._maybe_show_first_run()
 
     def _wire_signals(self) -> None:
         library = self.library_page
@@ -134,6 +138,8 @@ class MainWindow(QMainWindow):
         library.delete_requested.connect(self._delete_course)
         library.complete_toggled.connect(self._toggle_course_complete)
         library.open_in_explorer.connect(self._open_in_explorer)
+        library.backup_requested.connect(self._backup_course)
+        library.restore_requested.connect(self._restore_backup)
 
         self.wizard_page.course_created.connect(self._on_course_created)
         self.wizard_page.status_message.connect(lambda message: self.statusBar().showMessage(message, 8000))
@@ -238,6 +244,74 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"《{summary.name}》已{'标记完成' if completed else '取消完成'}（内容未改动）", 8000
         )
+
+    @Slot(object)
+    def _backup_course(self, summary: course_service.CourseSummary) -> None:
+        """备份单门课程为 zip（FR-13；备份包不含密钥）。"""
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..services import backup_service
+
+        target, _ = QFileDialog.getSaveFileName(
+            self, "备份课程", f"{summary.name}-备份.zip", "Zip 备份 (*.zip)"
+        )
+        if not target:
+            return
+        path = backup_service.backup_course(summary.path, target)
+        self.statusBar().showMessage(f"已备份到 {path.name}", 10000)
+
+    @Slot()
+    def _restore_backup(self) -> None:
+        """从 zip 恢复课程（恢复到课程库目录，重名自动追加后缀）。"""
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..services import restore_service
+
+        source, _ = QFileDialog.getOpenFileName(self, "选择备份文件", "", "Zip 备份 (*.zip)")
+        if not source:
+            return
+        try:
+            restored = restore_service.restore_from_zip(source, self._result.layout.courses)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "恢复失败", str(exc))
+            return
+        self.refresh_library()
+        self.statusBar().showMessage(f"已恢复 {len(restored)} 个文件到课程库", 10000)
+
+    @Slot()
+    def _maybe_show_first_run(self) -> None:
+        """首启动引导（未配置密钥时显示一次）。"""
+        if not self._result.needs_api_setup or self._first_run_shown:
+            return
+        self._first_run_shown = True
+        dialog = FirstRunDialog(has_seed_course=bool(self.library_page.course_list.count()), parent=self)
+        dialog.go_settings.connect(lambda: self.nav.setCurrentRow(self.NAV_SETTINGS))
+        dialog.go_new_course.connect(lambda: self.nav.setCurrentRow(self.NAV_WIZARD))
+        dialog.go_backup.connect(self._backup_library)
+        dialog.open_seed_course.connect(self._open_first_course)
+        # 非阻塞展示：不打断启动流程，也不影响自动化测试
+        self._first_run_dialog = dialog
+        dialog.show()
+
+    @Slot()
+    def _backup_library(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..services import backup_service
+
+        target, _ = QFileDialog.getSaveFileName(self, "备份课程库", "课程库备份.zip", "Zip 备份 (*.zip)")
+        if not target:
+            return
+        path = backup_service.backup_library(self._result.layout.courses, target)
+        self.statusBar().showMessage(f"已备份课程库到 {path.name}", 10000)
+
+    @Slot()
+    def _open_first_course(self) -> None:
+        if self.library_page.course_list.count():
+            self.library_page.course_list.setCurrentRow(0)
+            summary = self.library_page.selected_course()
+            if summary is not None:
+                self._open_course(summary)
 
     @Slot(object)
     def _open_in_explorer(self, summary: course_service.CourseSummary) -> None:

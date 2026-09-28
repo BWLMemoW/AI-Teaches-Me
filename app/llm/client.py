@@ -22,7 +22,7 @@ from typing import Any
 
 from ..core.cancel import CancellationToken
 from ..core.config import AppConfig, LLMProfile
-from ..core.errors import AuthError, ConfigError, ProviderError, classify_exception
+from ..core.errors import AuthError, ConfigError, FatalError, ProviderError, classify_exception
 from ..core.routing import ModelRouter
 from ..infra.secret_store import SecretStore, resolve_api_key, resolve_base_url
 from .usage import UsageTracker
@@ -196,6 +196,38 @@ class LLMClient:
         message = f"连接成功，可用模型 {len(models)} 个" if models else "连接成功"
         return ConnectionReport(ok=True, elapsed_ms=elapsed, models=models, message=message)
 
+
+    async def review_image(
+        self,
+        image_bytes: bytes,
+        *,
+        prompt: str,
+        task: str = "vision_review",
+        model: str | None = None,
+        cancel: CancellationToken | None = None,
+        max_bytes: int = 6 * 1024 * 1024,
+    ) -> str:
+        """多模态读图（默认档案 DeepSeek 自带读图，无需额外配置，AC-76）。"""
+        if not image_bytes:
+            raise FatalError("没有可评审的图片数据")
+        if len(image_bytes) > max_bytes:
+            raise FatalError("图片过大，已跳过多模态评审")
+        import base64
+
+        data = base64.b64encode(image_bytes).decode("ascii")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}},
+                ],
+            }
+        ]
+        parts: list[str] = []
+        async for piece in self.stream_chat(messages, task=task, model=model, cancel=cancel):
+            parts.append(piece)
+        return "".join(parts)
     # --- 内部 -----------------------------------------------------------
     def _resolve_profile(
         self,

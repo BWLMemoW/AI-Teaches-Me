@@ -1,0 +1,28 @@
+# ---- 用户数据：课程库 / 配置 / 索引 / 缓存 / 日志（不进版本管理）----
+# 这些目录由应用在工作区根目录下创建，结构见《技术文档》§3.2
+Courses/
+data/
+personas/
+logs/
+exports/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 打包产物 ----
+build/
+dist/
+*.spec
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini

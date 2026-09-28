@@ -1,0 +1,31 @@
+# AI Teaches Me 运行依赖
+# 与 docs/项目文档.md §6.3 依赖清单保持一致；本文件为开发环境安装入口
+
+# 界面
+PySide6>=6.6            # 含 QtWebEngine 与 QtSvg（SVG 渲染自检用）
+
+# 模型
+openai>=2.0             # OpenAI 兼容客户端（当前 2.41.0）
+httpx>=0.27             # 超时 / 代理 / 流式细节控制
+
+# 文档解析
+pypdf>=5.1              # PDF（当前 5.1.0）
+python-pptx>=1.0        # PPTX
+python-docx>=1.1        # DOCX
+Pillow>=10.0            # 图片
+
+# 渲染辅助
+Markdown>=3.7           # 服务端 Markdown → HTML
+pygments>=2.17          # 代码高亮
+
+# 其他
+keyring>=25.0           # 密钥安全存储（Windows DPAPI 后端）
+platformdirs>=4.0       # 跨平台目录规范
+pydantic>=2.7           # 结构化输出校验
+
+# 测试
+pytest>=7.0
+pytest-qt>=4.4          # UI 测试（pytest-qt）
+
+# 内嵌页面渲染依赖（markdown-it / KaTeX / highlight.js）不通过 pip 安装，
+# 需放入 app/web/vendor/ 随包分发，禁止 CDN 引用（见 app/web/vendor/README.md）

@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -89,6 +91,7 @@ class WizardPage(QWidget):
         self._service = service
         self._pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         self._draft: OutlineDraft | None = None
+        self._material_paths: list[Path] = []
         self._outline: CourseOutline | None = None
         self._token = CancellationToken()
         self._signals = _Signals()
@@ -129,7 +132,15 @@ class WizardPage(QWidget):
         layout.addWidget(QLabel("标签（选填）"))
         layout.addWidget(self.tags_edit)
 
-        note = QLabel("资料上传与解析（PDF / PPTX / DOCX / 图片）随 M5 提供，届时大纲会引用资料页码。")
+        self.material_button = QPushButton("选择资料并解析（PDF / PPTX / DOCX / TXT / MD / 图片）")
+        self.material_button.clicked.connect(self._on_pick_materials)
+        layout.addWidget(self.material_button)
+        self.material_label = QLabel("尚未选择资料（解析结果会写进课程 materials/，并作为大纲依据）")
+        self.material_label.setProperty("role", "muted")
+        self.material_label.setWordWrap(True)
+        layout.addWidget(self.material_label)
+
+        note = QLabel("支持 PDF / PPTX / DOCX / TXT / MD 与图片；解析在后台进行，可随时跳过。")
         note.setProperty("role", "muted")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -230,6 +241,44 @@ class WizardPage(QWidget):
 
     # --- 流程 -----------------------------------------------------------
     @Slot()
+    def _on_pick_materials(self) -> None:
+        """选择资料文件并解析（解析放到后台线程，避免卡界面）。"""
+        from PySide6.QtWidgets import QFileDialog
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择资料文件",
+            "",
+            "资料 (*.pdf *.pptx *.ppt *.docx *.txt *.md *.png *.jpg *.jpeg *.webp)",
+        )
+        if not files:
+            return
+        self._material_paths = [Path(item) for item in files]
+        from ...infra.sqlite_index import SqliteIndex
+        from ...services.material_service import MaterialService
+
+        workspace = self._service.courses_dir.parent
+        cache_dir = workspace / "data" / "cache" / "draft_materials"
+        index = None
+        try:
+            index = SqliteIndex(workspace / "data" / "library.db")
+            service = MaterialService(course_dir=cache_dir, index=index)
+            result = service.import_files(self._material_paths, course_id="draft")
+        except Exception as exc:  # noqa: BLE001 - 解析失败不阻塞建课
+            self.material_label.setText(f"资料解析失败：{exc}")
+            return
+        finally:
+            if index is not None:
+                index.close()
+        parsed = len(result.parsed)
+        failed = len(result.failed)
+        summary = result.summary_for_director()
+        self._material_summary = summary
+        self.material_label.setText(
+            f"已解析 {parsed} 份资料" + (f"，{failed} 份失败" if failed else "") + "；生成大纲时会被引用。"
+        )
+
+    @Slot()
     def _on_basic_next(self) -> None:
         name = self.name_edit.text().strip()
         if not name:
@@ -239,6 +288,7 @@ class WizardPage(QWidget):
         self._draft = self._service.new_draft(
             name,
             user_outline=self.user_outline_edit.toPlainText().strip(),
+            material_summary=getattr(self, "_material_summary", ""),
             tags=tags,
         )
         if self._draft.name != name:

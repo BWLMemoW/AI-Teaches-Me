@@ -279,8 +279,8 @@ def test_main_window_wires_pages_and_theme(qtbot, tmp_path: Path) -> None:
     window = MainWindow(result, services=services, bus=EventBus(), study_page=study)
     qtbot.addWidget(window)
 
-    assert window.stack.count() == 5
-    assert window.nav.count() == 5
+    assert window.stack.count() == 6
+    assert window.nav.count() == 6
     assert "尚未配置" in window.api_label.text()
     assert window.css_vars["--atm-theme"] == "sakura"
 

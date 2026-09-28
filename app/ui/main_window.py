@@ -25,6 +25,7 @@ from ..core.events import EventBus
 from ..services import course_service
 from .pages.library_page import LibraryPage
 from .pages.notes_page import NotesPage
+from .pages.qa_page import QaPage
 from .pages.settings_page import SettingsPage
 from .pages.study_page import StudyPage
 from .pages.wizard_page import WizardPage
@@ -51,8 +52,9 @@ class MainWindow(QMainWindow):
     NAV_COURSES = 0
     NAV_WIZARD = 1
     NAV_STUDY = 2
-    NAV_NOTES = 3
-    NAV_SETTINGS = 4
+    NAV_QA = 3
+    NAV_NOTES = 4
+    NAV_SETTINGS = 5
 
     def __init__(
         self,
@@ -81,7 +83,7 @@ class MainWindow(QMainWindow):
 
         self.nav = QListWidget()
         self.nav.setFixedWidth(170)
-        for label in ("课程库", "新建课程", "学习台", "笔记中心", "设置"):
+        for label in ("课程库", "新建课程", "学习台", "小灶", "笔记中心", "设置"):
             self.nav.addItem(QListWidgetItem(label))
         self.nav.currentRowChanged.connect(self._on_nav_changed)
         layout.addWidget(self.nav)
@@ -90,10 +92,18 @@ class MainWindow(QMainWindow):
         self.library_page = LibraryPage(result.layout.courses, service=self._services.library)
         self.wizard_page = WizardPage(self._services.outline, thread_pool=self._pool)
         self.study_page = study_page if study_page is not None else StudyPage(services=self._services, thread_pool=self._pool)
+        from ..agents.qa import QaAgent
+
+        self.qa_page = QaPage(
+            courses_dir=result.layout.courses,
+            agent_factory=lambda: QaAgent(self._services.client),
+            thread_pool=self._pool,
+        )
+        self.qa_page.status_message.connect(lambda message: self.statusBar().showMessage(message, 10000))
         self.notes_page = NotesPage(courses_dir=result.layout.courses, pdf_printer=None)
         self.notes_page.status_message.connect(lambda message: self.statusBar().showMessage(message, 10000))
         self.settings_page = SettingsPage(self._services.settings, thread_pool=self._pool)
-        for page in (self.library_page, self.wizard_page, self.study_page, self.notes_page, self.settings_page):
+        for page in (self.library_page, self.wizard_page, self.study_page, self.qa_page, self.notes_page, self.settings_page):
             self.stack.addWidget(page)
         layout.addWidget(self.stack, 1)
         self.setCentralWidget(central)

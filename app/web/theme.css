@@ -1,0 +1,318 @@
+/* 由 app/ui/theme/qss.py 生成：与 Qt 侧 token 同源，禁止手工改数值。 */
+/* 对应《技术文档》§13.7 与《项目文档》§11.1。 */
+
+/* 默认（樱花 · 明色）：未设置 data-theme 时的兜底变量 */
+:root {
+  --atm-accent: #6C8AE4;
+  --atm-bg: #FDF7F9;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #FBEEF3;
+  --atm-border: #EADCE3;
+  --atm-code-bg: #F6F1F4;
+  --atm-danger: #D9534F;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: light;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #E86A92;
+  --atm-primary-hover: #D2557E;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #3FA46A;
+  --atm-surface: #FFFFFF;
+  --atm-surface-alt: #F7F2F4;
+  --atm-text: #2B2430;
+  --atm-text-dim: #5C5566;
+  --atm-text-muted: #8A8394;
+  --atm-theme: sakura;
+  --atm-warning: #D9922B;
+}
+
+/* 深空 · 明色 */
+[data-theme="deepspace"][data-mode="light"] {
+  --atm-accent: #8A6BE0;
+  --atm-bg: #F4F6FB;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #E9EDF7;
+  --atm-border: #DDE3F1;
+  --atm-code-bg: #EEF1F9;
+  --atm-danger: #CE5A57;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: light;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #4C6BE0;
+  --atm-primary-hover: #3A57C9;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #3E9E6A;
+  --atm-surface: #FFFFFF;
+  --atm-surface-alt: #EEF1F9;
+  --atm-text: #1B2033;
+  --atm-text-dim: #4C5570;
+  --atm-text-muted: #7B8499;
+  --atm-theme: deepspace;
+  --atm-warning: #C98A22;
+}
+
+/* 深空 · 暗色 */
+[data-theme="deepspace"][data-mode="dark"] {
+  --atm-accent: #B49BFF;
+  --atm-bg: #0E1120;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #141830;
+  --atm-border: #2A3149;
+  --atm-code-bg: #141830;
+  --atm-danger: #F0807C;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: dark;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #7E97FF;
+  --atm-primary-hover: #97ABFF;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #5FC48A;
+  --atm-surface: #171B2C;
+  --atm-surface-alt: #1F2439;
+  --atm-text: #E8ECFB;
+  --atm-text-dim: #BFC7E4;
+  --atm-text-muted: #8891AF;
+  --atm-theme: deepspace;
+  --atm-warning: #E0B159;
+}
+
+/* 纸感 · 明色 */
+[data-theme="paper"][data-mode="light"] {
+  --atm-accent: #4F7A6F;
+  --atm-bg: #FBF7F0;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #F4EEE3;
+  --atm-border: #E6DCCB;
+  --atm-code-bg: #F4EFE6;
+  --atm-danger: #C0554E;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: light;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #B4763B;
+  --atm-primary-hover: #9C6431;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #4C8C5A;
+  --atm-surface: #FFFFFF;
+  --atm-surface-alt: #F7F2E8;
+  --atm-text: #2E2A24;
+  --atm-text-dim: #5F584E;
+  --atm-text-muted: #8C8478;
+  --atm-theme: paper;
+  --atm-warning: #C98A22;
+}
+
+/* 纸感 · 暗色 */
+[data-theme="paper"][data-mode="dark"] {
+  --atm-accent: #7FB3A5;
+  --atm-bg: #201D19;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #262320;
+  --atm-border: #3E3833;
+  --atm-code-bg: #262220;
+  --atm-danger: #E07B74;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: dark;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #D79A5B;
+  --atm-primary-hover: #E2AC72;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #6FAF78;
+  --atm-surface: #2B2724;
+  --atm-surface-alt: #332E2A;
+  --atm-text: #F4EFE7;
+  --atm-text-dim: #CFC7BB;
+  --atm-text-muted: #9C9488;
+  --atm-theme: paper;
+  --atm-warning: #D8A85A;
+}
+
+/* 樱花 · 明色 */
+[data-theme="sakura"][data-mode="light"] {
+  --atm-accent: #6C8AE4;
+  --atm-bg: #FDF7F9;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #FBEEF3;
+  --atm-border: #EADCE3;
+  --atm-code-bg: #F6F1F4;
+  --atm-danger: #D9534F;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: light;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #E86A92;
+  --atm-primary-hover: #D2557E;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #3FA46A;
+  --atm-surface: #FFFFFF;
+  --atm-surface-alt: #F7F2F4;
+  --atm-text: #2B2430;
+  --atm-text-dim: #5C5566;
+  --atm-text-muted: #8A8394;
+  --atm-theme: sakura;
+  --atm-warning: #D9922B;
+}
+
+/* 樱花 · 暗色 */
+[data-theme="sakura"][data-mode="dark"] {
+  --atm-accent: #8FA8F0;
+  --atm-bg: #1B1720;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #221D29;
+  --atm-border: #3A3244;
+  --atm-code-bg: #211C28;
+  --atm-danger: #F0807C;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: dark;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #F08BAE;
+  --atm-primary-hover: #F5A3C0;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #62C08A;
+  --atm-surface: #26212E;
+  --atm-surface-alt: #2E2837;
+  --atm-text: #F2EDF6;
+  --atm-text-dim: #CFC7D8;
+  --atm-text-muted: #9A93A6;
+  --atm-theme: sakura;
+  --atm-warning: #E5B25C;
+}
+
+/* 森林 · 明色 */
+[data-theme="forest"][data-mode="light"] {
+  --atm-accent: #A8792E;
+  --atm-bg: #F5F8F3;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #EBF1E7;
+  --atm-border: #DCE6D6;
+  --atm-code-bg: #EEF3EA;
+  --atm-danger: #BF5A50;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: light;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #3F7D4E;
+  --atm-primary-hover: #336842;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #3F7D4E;
+  --atm-surface: #FFFFFF;
+  --atm-surface-alt: #EFF4EC;
+  --atm-text: #21291F;
+  --atm-text-dim: #4E5A4A;
+  --atm-text-muted: #7C877A;
+  --atm-theme: forest;
+  --atm-warning: #B98A25;
+}
+
+/* 森林 · 暗色 */
+[data-theme="forest"][data-mode="dark"] {
+  --atm-accent: #D3A85E;
+  --atm-bg: #131A15;
+  --atm-bg-blur: 0;
+  --atm-bg-dim: 0;
+  --atm-bg-image: none;
+  --atm-bg-soft: #18211B;
+  --atm-border: #2C3A31;
+  --atm-code-bg: #18211B;
+  --atm-danger: #E08679;
+  --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
+  --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
+  --atm-line-height: 1.75;
+  --atm-mode: dark;
+  --atm-motion-fast: 150ms;
+  --atm-motion-normal: 250ms;
+  --atm-primary: #6FBE84;
+  --atm-primary-hover: #86CE99;
+  --atm-radius-button: 10px;
+  --atm-radius-card: 16px;
+  --atm-radius-small: 8px;
+  --atm-size-base: 14px;
+  --atm-size-body: 16px;
+  --atm-success: #6FBE84;
+  --atm-surface: #1C2620;
+  --atm-surface-alt: #243027;
+  --atm-text: #E6F0E7;
+  --atm-text-dim: #B9C9BB;
+  --atm-text-muted: #86988A;
+  --atm-theme: forest;
+  --atm-warning: #D9B161;
+}
+

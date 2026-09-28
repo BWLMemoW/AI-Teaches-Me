@@ -76,3 +76,37 @@ git config --global --add safe.directory "D:/+Coding/PyAI/Project/AI-Teaches-Me"
 | `app/web/vendor/highlight.js/` | highlight.js | 代码高亮 |
 
 硬约束（《技术文档》§1.5 第 4 条）：渲染资源全部本地，**禁止任何 CDN 与外链**；断网时讲义中的 Markdown、公式与代码高亮必须照常渲染。
+## 运行与自检（M0 起可用）
+
+```powershell
+# 启动应用：配置 API、测试连接、切换主题、离线阅读内置示例课程
+pwsh -File scripts/dev_run.ps1
+
+# 无界面自检：初始化工作区 → 切四套主题 → 装载示例课程 → 用 QtWebEngine 渲染讲义
+D:\Python\Python\python.exe -m app.main --self-check
+```
+
+自检输出 JSON 报告，`"ok": true` 即通过；其中 `web.vendor` 三项都是 `true` 表示
+markdown-it / KaTeX / highlight.js 已从本地 vendor 正常加载（全程无网络请求）。
+
+### 前端依赖入库与校验（禁止 CDN）
+
+```powershell
+D:\Python\Python\python.exe scripts/fetch_vendor.py         # 从 npm 官方 registry 下载并校验 sha512 后入库
+D:\Python\Python\python.exe scripts/fetch_vendor.py --check  # 只校验关键文件是否齐全
+```
+
+### 测试
+
+```powershell
+D:\Python\Python\python.exe -m pytest -q                     # 全量
+D:\Python\Python\python.exe -m pytest -q -m "not ui"          # 跳过需要 Qt 的用例
+```
+
+## M0 已完成（出口标准见《项目文档》§16.1）
+
+| 出口标准 | 落地位置 | 验证方式 |
+| --- | --- | --- |
+| 能配置 API 并完成一次流式对话 | `app/services/settings_service.py`、`app/llm/client.py` | `tests/unit/test_llm_client.py`、`tests/integration/test_m0_flow.py` |
+| 主题可切换 | `app/ui/theme/`（一套 token 同时产出 QSS 与 CSS 变量） | `tests/unit/test_theme.py`、`tests/unit/test_ui_m0.py` |
+| 示例课程可离线阅读 | `app/ui/assets/seed_courses/`、`app/bootstrap.py`、`app/web/` | `tests/unit/test_seed_course.py`、`tests/integration/test_m0_flow.py` |

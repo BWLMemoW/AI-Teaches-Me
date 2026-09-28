@@ -1,0 +1,330 @@
+"""统一 LLM 客户端的契约测试（《技术文档》§4.4.1、《项目文档》§13.1 与 T-04）。"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from app.core.cancel import CancellationToken
+from app.core.config import LLMProfile, default_config
+from app.core.errors import AuthError, ConfigError, RetryableError
+from app.infra.secret_store import InMemoryBackend, SecretStore
+from app.llm.client import LLMClient
+from app.llm.usage import UsageTracker
+
+MESSAGES = [{"role": "user", "content": "你好"}]
+
+
+def _http_error(name: str, status: int | None = None) -> Exception:
+    klass = type(name, (Exception,), {})
+    exc = klass(name)
+    if status is not None:
+        exc.status_code = status
+    return exc
+
+
+class _FakeStream:
+    def __init__(self, items=(), error=None, block=False):
+        self._items = list(items)
+        self._error = error
+        self._block = block
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._items:
+            return self._items.pop(0)
+        if self._error is not None:
+            error, self._error = self._error, None
+            raise error
+        if self._block:
+            await asyncio.sleep(3600)
+        raise StopAsyncIteration
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeCompletions:
+    def __init__(self, factory):
+        self._factory = factory
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._factory(len(self.calls))
+
+
+class _FakeModels:
+    def __init__(self, ids=None, error=None):
+        self._ids = list(ids or [])
+        self._error = error
+
+    async def list(self):
+        if self._error is not None:
+            raise self._error
+        return SimpleNamespace(data=[SimpleNamespace(id=item) for item in self._ids])
+
+
+class _FakeClient:
+    def __init__(self, completions, models=None):
+        self.chat = SimpleNamespace(completions=completions)
+        self.models = models if models is not None else _FakeModels()
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _chunk(text: str = "", usage=None):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(delta=SimpleNamespace(content=text))], usage=usage
+    )
+
+
+def _usage(prompt: int = 10, completion: int = 5):
+    return SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion)
+
+
+def _store() -> SecretStore:
+    store = SecretStore(backend=InMemoryBackend())
+    store.set_secret("atm/deepseek-default", "sk-test-1234")
+    return store
+
+
+def _client(make_stream, *, models=None, sleep=None, usage=None):
+    completions = _FakeCompletions(make_stream)
+    holder: dict[str, object] = {}
+
+    def factory(profile: LLMProfile, api_key: str):
+        holder["api_key"] = api_key
+        holder["profile"] = profile
+        client = _FakeClient(completions, models)
+        holder["client"] = client
+        return client
+
+    llm = LLMClient(
+        default_config(),
+        secret_store=_store(),
+        usage=usage if usage is not None else UsageTracker(),
+        client_factory=factory,
+        sleep=sleep if sleep is not None else (lambda delay: asyncio.sleep(0)),
+        env={},
+    )
+    return llm, completions, holder
+
+
+async def _collect(llm: LLMClient, **kwargs) -> list[str]:
+    return [piece async for piece in llm.stream_chat(MESSAGES, **kwargs)]
+
+
+def test_stream_chat_yields_text_and_records_reported_usage() -> None:
+    stream = _FakeStream([_chunk("第一段"), _chunk("第二段"), _chunk("", usage=_usage(12, 8))])
+    usage = UsageTracker()
+    llm, completions, holder = _client(lambda n: stream, usage=usage)
+
+    pieces = asyncio.run(_collect(llm))
+
+    assert pieces == ["第一段", "第二段"]
+    assert holder["api_key"] == "sk-test-1234"
+    assert len(completions.calls) == 1
+    assert completions.calls[0]["stream"] is True
+    assert completions.calls[0]["model"] == "deepseek-flash"
+    assert usage.total()["completion_tokens"] == 8
+    assert usage.total()["calls"] == 1
+
+
+def test_tools_and_json_schema_are_forwarded() -> None:
+    llm, completions, _ = _client(lambda n: _FakeStream([_chunk("x")]))
+    tools = [{"type": "function", "function": {"name": "web_search"}}]
+    schema = {"name": "outline", "schema": {"type": "object"}}
+
+    asyncio.run(_collect(llm, tools=tools, json_schema=schema))
+
+    call = completions.calls[0]
+    assert call["tools"] == tools
+    assert call["response_format"]["type"] == "json_schema"
+
+
+def test_401_is_not_retried() -> None:
+    attempts: list[int] = []
+
+    def make(count: int):
+        attempts.append(count)
+        raise _http_error("AuthenticationError", 401)
+
+    llm, completions, _ = _client(make)
+
+    with pytest.raises(AuthError):
+        asyncio.run(_collect(llm))
+
+    assert attempts == [1]
+    assert len(completions.calls) == 1
+
+
+def test_429_retries_with_exponential_backoff_then_succeeds() -> None:
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    def make(count: int):
+        if count < 3:
+            raise _http_error("RateLimitError", 429)
+        return _FakeStream([_chunk("好了")])
+
+    llm, completions, _ = _client(make, sleep=fake_sleep)
+
+    assert asyncio.run(_collect(llm)) == ["好了"]
+    assert len(completions.calls) == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_retry_budget_exhausted_raises_retryable_error() -> None:
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    def make(count: int):
+        raise _http_error("RateLimitError", 429)
+
+    llm, completions, _ = _client(make, sleep=fake_sleep)
+
+    with pytest.raises(RetryableError):
+        asyncio.run(_collect(llm))
+
+    assert len(completions.calls) == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_timeout_maps_to_retryable_error() -> None:
+    def make(count: int):
+        raise _http_error("APITimeoutError")
+
+    llm, completions, _ = _client(make)
+
+    with pytest.raises(RetryableError):
+        asyncio.run(_collect(llm))
+
+    assert len(completions.calls) == 3
+
+
+def test_partial_output_is_not_retried() -> None:
+    def make(count: int):
+        return _FakeStream([_chunk("半句")], error=_http_error("RateLimitError", 429))
+
+    llm, completions, _ = _client(make)
+    pieces: list[str] = []
+
+    async def run() -> None:
+        async for piece in llm.stream_chat(MESSAGES):
+            pieces.append(piece)
+
+    with pytest.raises(RetryableError):
+        asyncio.run(run())
+
+    assert pieces == ["半句"]
+    assert len(completions.calls) == 1
+
+
+def test_cancel_before_start_does_not_open_client() -> None:
+    token = CancellationToken()
+    token.cancel()
+    llm, completions, holder = _client(lambda n: _FakeStream([_chunk("不该出现")]))
+
+    assert asyncio.run(_collect(llm, cancel=token)) == []
+    assert completions.calls == []
+    assert "client" not in holder
+
+
+def test_cancel_mid_stream_stops_promptly_and_closes_stream() -> None:
+    stream = _FakeStream([_chunk("第一句")], block=True)
+    llm, _, _ = _client(lambda n: stream)
+    token = CancellationToken()
+
+    async def run() -> tuple[list[str], float]:
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, token.cancel)
+        started = time.perf_counter()
+        pieces = [piece async for piece in llm.stream_chat(MESSAGES, cancel=token)]
+        return pieces, time.perf_counter() - started
+
+    pieces, elapsed = asyncio.run(run())
+
+    assert pieces == ["第一句"]
+    assert elapsed < 2.0
+    assert stream.closed is True
+
+
+def test_usage_recorded_when_endpoint_reports_nothing() -> None:
+    usage = UsageTracker()
+    llm, _, _ = _client(lambda n: _FakeStream([_chunk("x")]), usage=usage)
+
+    asyncio.run(_collect(llm))
+
+    assert usage.total() == {
+        "calls": 1,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+
+
+def test_probe_connection_lists_models_without_chat_call() -> None:
+    models = _FakeModels(["deepseek-chat", "deepseek-flash"])
+    llm, completions, _ = _client(lambda n: _FakeStream(), models=models)
+
+    report = asyncio.run(llm.probe_connection())
+
+    assert report.ok is True
+    assert report.models == ["deepseek-chat", "deepseek-flash"]
+    assert report.elapsed_ms >= 0
+    assert completions.calls == []
+
+
+def test_probe_connection_reports_auth_failure() -> None:
+    models = _FakeModels(error=_http_error("AuthenticationError", 401))
+    llm, _, _ = _client(lambda n: _FakeStream(), models=models)
+
+    report = asyncio.run(llm.probe_connection())
+
+    assert report.ok is False
+    assert report.status == 401
+    assert "API Key" in report.message
+
+
+def test_probe_connection_tolerates_missing_models_api() -> None:
+    models = _FakeModels(error=_http_error("NotFoundError", 404))
+    llm, _, _ = _client(lambda n: _FakeStream(), models=models)
+
+    report = asyncio.run(llm.probe_connection())
+
+    assert report.ok is True
+    assert "模型列表" in report.message
+
+
+def test_probe_connection_requires_api_key() -> None:
+    llm = LLMClient(
+        default_config(),
+        secret_store=SecretStore(backend=InMemoryBackend()),
+        client_factory=lambda profile, key: _FakeClient(_FakeCompletions(lambda n: _FakeStream())),
+        env={},
+    )
+
+    report = asyncio.run(llm.probe_connection())
+
+    assert report.ok is False
+    assert "API Key" in report.message
+
+
+def test_unknown_profile_name_raises_config_error() -> None:
+    llm, _, _ = _client(lambda n: _FakeStream())
+
+    with pytest.raises(ConfigError):
+        asyncio.run(_collect(llm, profile="ghost"))

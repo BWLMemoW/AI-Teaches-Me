@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "course_id": "course-seed-atm-guide",
+  "last_lesson": null,
+  "streak_days": 0,
+  "total_minutes": 0,
+  "updated_at": "2026-09-28T10:00:00+08:00",
+  "lessons": {
+    "L1-1": { "status": "not_started", "mastery": null, "quiz_score": null, "minutes": 0 }
+  },
+  "review_queue": []
+}

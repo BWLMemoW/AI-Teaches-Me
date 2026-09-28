@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="sakura" data-mode="light">
+<head>
+  <meta charset="utf-8" />
+  <title>AI Teaches Me · 渲染内核</title>
+  <!--
+    CSP 说明（对应《技术文档》§4.8 / §13.3 安全边界）：
+    禁网是硬要求——只允许本地 file: 资源、data: 图片与内联样式脚本，不允许任何 http(s) 外链。
+    之所以比 §4.8 的示例多放开 file:，是因为 §1.5 红线 4 要求 markdown-it / KaTeX / highlight.js
+    全部走本地 vendor（app/web/vendor/），仅靠 'unsafe-inline' 无法加载本地脚本文件。
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' file:; style-src 'self' 'unsafe-inline' file:; img-src 'self' data: file:; font-src 'self' data: file:; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'self' file: data:; base-uri 'none'; form-action 'none'" />
+  <link rel="stylesheet" href="theme.css" />
+  <!-- 本地 vendor：缺失时 renderer.js 自动降级，页面不会白屏 -->
+  <link id="atm-hljs-light" rel="stylesheet" href="vendor/highlight.js/atom-one-light.min.css" />
+  <link id="atm-hljs-dark" rel="stylesheet" href="vendor/highlight.js/atom-one-dark.min.css" disabled />
+  <link rel="stylesheet" href="vendor/katex/katex.min.css" />
+  <style>
+    html, body { margin: 0; padding: 0; }
+    body {
+      background-color: var(--atm-bg);
+      color: var(--atm-text);
+      font-family: var(--atm-font-ui);
+      font-size: var(--atm-size-body);
+      line-height: var(--atm-line-height);
+    }
+    #atm-root { max-width: var(--atm-reading-width, 820px); margin: 0 auto; padding: 24px 20px 48px; }
+    .atm-meta { color: var(--atm-text-muted); font-size: 12px; margin-bottom: 8px; }
+    .atm-block { margin: 0 0 16px; }
+    .atm-text h1, .atm-text h2, .atm-text h3 { line-height: 1.35; }
+    .atm-text h2 { font-size: 1.35em; margin: 1.2em 0 .5em; }
+    .atm-text h3 { font-size: 1.15em; margin: 1em 0 .4em; }
+    .atm-callout {
+      border: 1px solid var(--atm-border); border-left: 4px solid var(--atm-primary);
+      background: var(--atm-surface); border-radius: var(--atm-radius-card);
+      padding: 12px 14px;
+    }
+    .atm-callout-title { font-weight: 600; margin-bottom: 4px; }
+    .atm-callout[data-style="warn"] { border-left-color: var(--atm-warning); }
+    .atm-callout[data-style="question"] { border-left-color: var(--atm-accent); }
+    .atm-card {
+      border: 1px solid var(--atm-border); background: var(--atm-surface);
+      border-radius: var(--atm-radius-card); padding: 12px 14px;
+    }
+    .atm-table { width: 100%; border-collapse: collapse; }
+    .atm-table th, .atm-table td { border: 1px solid var(--atm-border); padding: 6px 10px; text-align: left; }
+    .atm-table th { background: var(--atm-surface-alt); }
+    pre.atm-code {
+      background: var(--atm-code-bg); border: 1px solid var(--atm-border);
+      border-radius: var(--atm-radius-small); padding: 12px 14px; overflow-x: auto;
+    }
+    pre.atm-code code { font-family: var(--atm-font-code); font-size: 13px; }
+    .atm-lang { color: var(--atm-text-muted); font-size: 12px; margin-bottom: 6px; }
+    .atm-quiz-option { display: block; margin: 4px 0; }
+    .atm-math-fallback { background: var(--atm-code-bg); padding: 0 4px; border-radius: 4px; }
+    .atm-placeholder { color: var(--atm-text-muted); font-size: 12px; }
+    .atm-svg { display: block; max-width: 100%; }
+    .atm-svg svg { max-width: 100%; height: auto; }
+    .atm-animation iframe { width: 100%; border: 1px solid var(--atm-border); border-radius: var(--atm-radius-small); background: var(--atm-surface); }
+    .atm-ref { border-left: 3px solid var(--atm-accent); background: var(--atm-surface-alt); padding: 8px 12px; border-radius: var(--atm-radius-small); }
+    .atm-error { border: 1px solid var(--atm-danger); color: var(--atm-danger); border-radius: var(--atm-radius-small); padding: 10px 12px; }
+    .atm-summary ul { margin: 6px 0 0 18px; }
+    .atm-raw { color: var(--atm-text-muted); font-size: 12px; }
+    .atm-vendor-warning { color: var(--atm-warning); font-size: 12px; margin-bottom: 12px; }
+  </style>
+  <script src="vendor/markdown-it/markdown-it.min.js"></script>
+  <script src="vendor/katex/katex.min.js"></script>
+  <script src="vendor/highlight.js/highlight.min.js"></script>
+</head>
+<body>
+  <main id="atm-root" role="reading"></main>
+  <script src="renderer.js"></script>
+</body>
+</html>

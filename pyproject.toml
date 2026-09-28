@@ -25,6 +25,9 @@ dev = ["pytest>=7.0", "pytest-qt>=4.4"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+pythonpath = ["."]
 markers = [
     "no_network: 该用例不得访问网络（见《项目文档》§15.3 无网络回归）",
+    "ui: 需要 Qt（pytest-qt，离屏可跑）",
+    "integration: 需要跨模块协作的集成用例",
 ]

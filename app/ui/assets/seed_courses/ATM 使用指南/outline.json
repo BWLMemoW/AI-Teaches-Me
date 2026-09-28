@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "course_id": "course-seed-atm-guide",
+  "learning_goals": ["能配置一个可用的模型档案，并完成一次流式对话"],
+  "estimated_hours": 0.5,
+  "chapters": [
+    {
+      "id": "C1",
+      "title": "三分钟上手",
+      "summary": "先把 AI 接上，再创建第一门课。",
+      "lessons": [
+        {
+          "id": "L1-1",
+          "title": "先配置你的 AI",
+          "objectives": ["能说出配置写在哪里、密钥存在哪里", "能完成一次「测试连接」并读懂结果"],
+          "estimated_minutes": 5,
+          "prerequisites": [],
+          "source_refs": [],
+          "knowledge_points": [
+            {
+              "id": "kp-seed-001",
+              "title": "工作区与课程数据分离",
+              "summary": "Courses/ 与 data/ 是用户资产，升级程序不影响它们。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-002",
+              "title": "供应商档案与密钥存储",
+              "summary": "配置只存 secret_ref；真实密钥进系统凭据库。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-003",
+              "title": "测试连接看什么",
+              "summary": "握手耗时、可用模型列表、可读的错误原因。",
+              "difficulty": "beginner",
+              "must_master": false
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "assessment_plan": ["读完后点「标记完成」，并自评掌握度"]
+}

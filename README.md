@@ -110,3 +110,15 @@ D:\Python\Python\python.exe -m pytest -q -m "not ui"          # 跳过需要 Qt 
 | 能配置 API 并完成一次流式对话 | `app/services/settings_service.py`、`app/llm/client.py` | `tests/unit/test_llm_client.py`、`tests/integration/test_m0_flow.py` |
 | 主题可切换 | `app/ui/theme/`（一套 token 同时产出 QSS 与 CSS 变量） | `tests/unit/test_theme.py`、`tests/unit/test_ui_m0.py` |
 | 示例课程可离线阅读 | `app/ui/assets/seed_courses/`、`app/bootstrap.py`、`app/web/` | `tests/unit/test_seed_course.py`、`tests/integration/test_m0_flow.py` |
+## 快捷打开方式（推荐）
+
+**双击桌面的「AI Teaches Me」图标即可启动**，不需要命令行：
+
+| 入口 | 位置 | 说明 |
+| --- | --- | --- |
+| 桌面快捷方式 | `AI Teaches Me.lnk`（桌面） | 双击启动；已绑定 `app/ui/assets/icons/atm.ico` 图标 |
+| 启动脚本 | 仓库根目录 `启动 AI Teaches Me.vbs` | 双击即启动，**不弹出控制台窗口**；优先用 `.venv`，否则回退系统 Python |
+| 打包版 | `dist/AI-Teaches-Me/AI-Teaches-Me.exe` | `pwsh -File scripts/build.ps1 -OneDir` 生成的免安装版本 |
+
+首次启动会弹出「三步开始」引导：① 配置 API → ② 新建课程 → ③ 先读内置示例课程。
+课程与配置都在工作区里，课程库页可直接「备份课程 / 恢复备份」。

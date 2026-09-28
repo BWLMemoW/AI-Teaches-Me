@@ -158,6 +158,11 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName(APP_TITLE)
+    icon_path = Path(__file__).resolve().parent / "ui" / "assets" / "icons" / "atm.ico"
+    if icon_path.exists():
+        from PySide6.QtGui import QIcon
+
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     result = prepare_bootstrap(args)
     services = build_services(result)

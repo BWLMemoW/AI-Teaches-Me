@@ -3,7 +3,8 @@
 M23 起回答**渲染 Markdown**（标题/列表/表格/代码块），不再吐原始 NDJSON：
 * 记录区用 ``QTextBrowser``（Qt 富文本，支持表格与等宽代码）；
 * 模型流式吐 NDJSON → 解析成内容块 → 逐块转 Markdown → 追加渲染（块级流式）；
-* 记录区只读且不可获焦；输入框在下方与发送按钮同行；支持「放大」到独立窗口。
+* 记录区只读且不可获焦；输入框在下方与发送按钮同行；支持「放大」到独立窗口；
+* 同时维护一份 Markdown 源（``conversation_markdown``），供「放大」窗口保留结构地展示。
 """
 
 from __future__ import annotations
@@ -24,8 +25,6 @@ from PySide6.QtWidgets import (
 from ...core.models import ContentBlock
 from ...llm.stream import BlockStreamParser
 
-FALLBACK_CSS = "pre { background:#F6F8FA; padding:8px; }"
-
 
 def markdown_to_html(text: str) -> str:
     """Markdown → HTML（Qt 富文本可渲染）；失败时降级为等宽原文。"""
@@ -38,13 +37,18 @@ def markdown_to_html(text: str) -> str:
         return "<pre>" + escape(source) + "</pre>"
 
 
+def block_to_markdown(block: dict) -> str:
+    """单个内容块 → Markdown 文本（解析失败时退化为围栏代码块，避免丢内容）。"""
+    try:
+        return ContentBlock.model_validate(block).to_markdown()
+    except Exception:  # noqa: BLE001
+        return "```json\n" + str(block) + "\n```"
+
+
 def blocks_to_html(blocks: list[dict]) -> str:
     parts: list[str] = []
     for block in blocks:
-        try:
-            markdown_text = ContentBlock.model_validate(block).to_markdown()
-        except Exception:  # noqa: BLE001
-            markdown_text = "```json\n" + str(block) + "\n```"
+        markdown_text = block_to_markdown(block)
         if markdown_text.strip():
             parts.append(markdown_to_html(markdown_text))
     return "".join(parts)
@@ -78,7 +82,7 @@ class ChatDrawer(QWidget):
         title.setProperty("role", "subtitle")
         layout.addWidget(title)
 
-        self.history_label = QLabel("对话记录（只读；这里只是展示，不能输入）")
+        self.history_label = QLabel("对话记录（只读；这里只展示，不能输入）")
         self.history_label.setProperty("role", "muted")
         self.history_label.setWordWrap(True)
         layout.addWidget(self.history_label)
@@ -125,9 +129,10 @@ class ChatDrawer(QWidget):
         composer.addLayout(buttons)
         layout.addLayout(composer)
 
-        # 回答流式解析状态
+        # 回答流式解析状态 + Markdown 源（供放大窗口）
         self._parser = BlockStreamParser()
         self._rendered_blocks = 0
+        self._transcript_md: list[str] = []
 
     # --- 加载与写入 -----------------------------------------------------
     selection = ""
@@ -144,17 +149,24 @@ class ChatDrawer(QWidget):
         self.history.clear()
         self._parser = BlockStreamParser()
         self._rendered_blocks = 0
+        self._transcript_md = []
+
+    def _push_markdown(self, text: str) -> None:
+        if text:
+            self._transcript_md.append(text)
 
     def append_user(self, text: str) -> None:
         self.history.append(
             f'<p style="margin:8px 0 2px;"><b>我：</b>{escape(str(text))}</p>'
         )
+        self._push_markdown(f"**我：** {text}\n\n")
 
     def begin_answer(self) -> None:
         """开始一段回答：重置解析器并写入「老师：」标签。"""
         self._parser = BlockStreamParser()
         self._rendered_blocks = 0
         self.history.append('<p style="margin:8px 0 2px;"><b>老师：</b></p>')
+        self._push_markdown("**老师：**\n\n")
 
     def feed_answer_piece(self, piece: str) -> None:
         """流式喂入 NDJSON 片段：每完成一个内容块就渲染一段 Markdown。"""
@@ -165,7 +177,9 @@ class ChatDrawer(QWidget):
         self._parser.finish()
         self._flush_new_blocks()
         if self._parser.protocol_broken:
-            self.history.append(markdown_to_html(self._parser.fallback_markdown()))
+            fallback = self._parser.fallback_markdown()
+            self.history.append(markdown_to_html(fallback))
+            self._push_markdown(fallback + "\n\n")
 
     def _flush_new_blocks(self) -> None:
         blocks = self._parser.blocks[self._rendered_blocks :]
@@ -173,6 +187,8 @@ class ChatDrawer(QWidget):
             return
         self._rendered_blocks = len(self._parser.blocks)
         self.history.append(blocks_to_html(blocks))
+        for block in blocks:
+            self._push_markdown(block_to_markdown(block).rstrip() + "\n\n")
         scrollbar = self.history.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -190,20 +206,24 @@ class ChatDrawer(QWidget):
         for record in records:
             if record.get("role") == "user":
                 self.append_user(record.get("text") or "")
+                continue
+            raw = str(record.get("md") or "")
+            if raw.strip().startswith("{"):
+                parser = BlockStreamParser()
+                parser.feed(raw)
+                parser.finish()
+                markdown_parts = [block_to_markdown(block) for block in parser.blocks]
+                html = blocks_to_html(parser.blocks) or markdown_to_html(raw)
+                markdown_source = "\n\n".join(part.strip() for part in markdown_parts if part.strip()) or raw
             else:
-                raw = str(record.get("md") or "")
-                if raw.strip().startswith("{"):
-                    parser = BlockStreamParser()
-                    parser.feed(raw)
-                    parser.finish()
-                    html = blocks_to_html(parser.blocks) or markdown_to_html(raw)
-                else:
-                    html = markdown_to_html(raw)
-                self.history.append('<p style="margin:8px 0 2px;"><b>老师：</b></p>' + html)
+                html = markdown_to_html(raw)
+                markdown_source = raw
+            self.history.append('<p style="margin:8px 0 2px;"><b>老师：</b></p>' + html)
+            self._push_markdown("**老师：**\n\n" + markdown_source.strip() + "\n\n")
 
     def conversation_markdown(self) -> str:
-        """把当前对话整理成 Markdown（供「放大」窗口展示）。"""
-        return self.history.toPlainText()
+        """当前对话的 Markdown 源（供「放大」窗口保留结构地阅读）。"""
+        return "".join(self._transcript_md)
 
     # --- 交互 -----------------------------------------------------------
     def _on_send(self) -> None:

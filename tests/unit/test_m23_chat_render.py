@@ -138,3 +138,22 @@ def test_study_page_zoom_opens_document_window(qtbot, tmp_path, monkeypatch) -> 
         assert opened and "这是什么？" in opened[0]
     finally:
         services.index.close()
+
+def test_conversation_markdown_keeps_structure(qtbot) -> None:
+    """「放大」窗口读的是 Markdown 源：结构（标题/列表/代码围栏）必须保留。"""
+    from app.ui.widgets.chat_drawer import ChatDrawer
+
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+    drawer.append_user("两个问题")
+    drawer.begin_answer()
+    drawer.feed_answer_piece(_ndjson({"type": "text", "md": "### 小标题\n\n- 甲\n- 乙"}))
+    drawer.feed_answer_piece(_ndjson({"type": "code", "lang": "python", "code": "x = 1"}))
+    drawer.end_answer()
+
+    md = drawer.conversation_markdown()
+    assert "**我：** 两个问题" in md
+    assert "**老师：**" in md
+    assert "### 小标题" in md and "- 甲" in md
+    assert "python" in md and "x = 1" in md
+    assert '{"type"' not in md

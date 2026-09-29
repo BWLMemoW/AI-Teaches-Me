@@ -2,24 +2,42 @@
   "schema_version": 1,
   "id": "course-seed-atm-guide",
   "name": "ATM 使用指南",
-  "description": "内置示例课程：三分钟学会配置 API、创建课程、切换主题与使用人设。",
+  "description": "内置示例课程：配置 API、创建课程、用人设、做笔记与导出——一门真正学得完的入门课。",
   "created_at": "2026-09-28T10:00:00+08:00",
   "updated_at": "2026-09-28T10:00:00+08:00",
   "cover": null,
   "theme": "sakura",
   "persona": "default-teacher",
-  "tags": ["入门", "使用指南"],
+  "tags": [
+    "入门",
+    "使用指南"
+  ],
   "pinned": true,
   "sort_index": 0,
   "seed": true,
-  "learning": { "quiz": "inherit", "self_assessment": "inherit", "web_search": "inherit" },
-  "background": { "type": "gradient", "value": "linear-gradient(135deg, #FDF2F6 0%, #EEF2FF 100%)", "path": null, "blur": 0, "dim": 0.1 },
+  "learning": {
+    "quiz": "inherit",
+    "self_assessment": "inherit",
+    "web_search": "inherit"
+  },
+  "background": {
+    "type": "gradient",
+    "value": "linear-gradient(135deg, #FDF2F6 0%, #EEF2FF 100%)",
+    "path": null,
+    "blur": 0,
+    "dim": 0.1
+  },
   "profile": {
     "target_audience": "第一次打开 ATM 的人",
     "goal": "能独立配置 API，并读完这一节",
     "depth": "minimal",
     "weekly_minutes": 30
   },
-  "stats": { "chapters": 1, "lessons": 1, "completed_lessons": 0, "total_minutes": 5 },
+  "stats": {
+    "chapters": 2,
+    "lessons": 5,
+    "completed_lessons": 0,
+    "total_minutes": 37
+  },
   "llm_profile": null
 }

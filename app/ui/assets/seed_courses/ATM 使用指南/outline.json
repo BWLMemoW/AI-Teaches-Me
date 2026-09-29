@@ -1,8 +1,11 @@
 {
   "schema_version": 1,
   "course_id": "course-seed-atm-guide",
-  "learning_goals": ["能配置一个可用的模型档案，并完成一次流式对话"],
-  "estimated_hours": 0.5,
+  "learning_goals": [
+    "能配置一个可用的模型档案并完成一次流式对话",
+    "能创建自己的课程并推进学习"
+  ],
+  "estimated_hours": 1.0,
   "chapters": [
     {
       "id": "C1",
@@ -12,7 +15,10 @@
         {
           "id": "L1-1",
           "title": "先配置你的 AI",
-          "objectives": ["能说出配置写在哪里、密钥存在哪里", "能完成一次「测试连接」并读懂结果"],
+          "objectives": [
+            "能说出配置写在哪里、密钥存在哪里",
+            "能完成一次「测试连接」并读懂结果"
+          ],
           "estimated_minutes": 5,
           "prerequisites": [],
           "source_refs": [],
@@ -39,9 +45,163 @@
               "must_master": false
             }
           ]
+        },
+        {
+          "id": "L1-2",
+          "title": "创建你的第一门课",
+          "objectives": [
+            "能只填课程名就生成大纲",
+            "能看懂大纲里的章/小节/知识点"
+          ],
+          "estimated_minutes": 8,
+          "prerequisites": [
+            "L1-1"
+          ],
+          "source_refs": [],
+          "knowledge_points": [
+            {
+              "id": "kp-seed-101",
+              "title": "课程目标与深度",
+              "summary": "应试/速成/兴趣/精讲决定大纲结构与讲解侧重。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-102",
+              "title": "大纲三段结构",
+              "summary": "章 → 小节 → 知识点，知识点才是教学的最小单元。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-103",
+              "title": "落盘位置",
+              "summary": "课程写在 Courses/<课程名>/，可备份可迁移。",
+              "difficulty": "beginner",
+              "must_master": false
+            }
+          ]
+        },
+        {
+          "id": "L1-3",
+          "title": "用起来：小灶、笔记与导出",
+          "objectives": [
+            "能在小节内追问并沉淀为笔记",
+            "能导出 Markdown 与 PDF"
+          ],
+          "estimated_minutes": 8,
+          "prerequisites": [
+            "L1-2"
+          ],
+          "source_refs": [],
+          "knowledge_points": [
+            {
+              "id": "kp-seed-201",
+              "title": "追问与上下文",
+              "summary": "追问会带上本小节讲义与选中片段。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-202",
+              "title": "笔记两种来源",
+              "summary": "AI 整理的结构化笔记 + 自己手写的 notebook.md。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-203",
+              "title": "导出格式",
+              "summary": "Markdown 便于 Obsidian/GitHub；PDF 用内置渲染内核打印。",
+              "difficulty": "beginner",
+              "must_master": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C2",
+      "title": "把课程变成你自己的",
+      "summary": "风格、深度与学习方式都由你决定。",
+      "lessons": [
+        {
+          "id": "L2-1",
+          "title": "换个老师：教学人设怎么选",
+          "objectives": [
+            "能解释人设只影响表达层",
+            "能新建或导入一个人设"
+          ],
+          "estimated_minutes": 8,
+          "prerequisites": [
+            "L1-3"
+          ],
+          "source_refs": [],
+          "knowledge_points": [
+            {
+              "id": "kp-seed-301",
+              "title": "人设只改表达",
+              "summary": "知识点覆盖度、深度与输出协议不被人设改变。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-302",
+              "title": "人设文件格式",
+              "summary": "YAML 头（id/name/tone/tools…）+ Markdown 正文。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-303",
+              "title": "换种讲法",
+              "summary": "同一小节可用新人设重讲，旧版本保留在 history/。",
+              "difficulty": "beginner",
+              "must_master": false
+            }
+          ]
+        },
+        {
+          "id": "L2-2",
+          "title": "深度学习方式：测验、自评与复习",
+          "objectives": [
+            "能配置三级三态的测验/自评开关",
+            "能看懂复习队列的生成规则"
+          ],
+          "estimated_minutes": 8,
+          "prerequisites": [
+            "L2-1"
+          ],
+          "source_refs": [],
+          "knowledge_points": [
+            {
+              "id": "kp-seed-401",
+              "title": "三级三态",
+              "summary": "小节 > 课程 > 全局，取值 inherit/on/off。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-402",
+              "title": "关掉也不影响进度",
+              "summary": "关掉测验与自评后，读完点「标记完成」即可，进度照常累计。",
+              "difficulty": "beginner",
+              "must_master": true
+            },
+            {
+              "id": "kp-seed-403",
+              "title": "复习队列",
+              "summary": "掌握度低的小节自动进入待复习，间隔递增。",
+              "difficulty": "beginner",
+              "must_master": false
+            }
+          ]
         }
       ]
     }
   ],
-  "assessment_plan": ["读完后点「标记完成」，并自评掌握度"]
+  "assessment_plan": [
+    "每章末自测一次",
+    "读完全部小节后导出课程笔记"
+  ]
 }

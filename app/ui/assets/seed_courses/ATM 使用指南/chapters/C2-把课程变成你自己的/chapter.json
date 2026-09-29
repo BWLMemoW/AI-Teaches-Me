@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "C2",
+  "title": "把课程变成你自己的",
+  "summary": "风格、深度与学习方式都由你决定。",
+  "lesson_order": [
+    "L2-1",
+    "L2-2"
+  ]
+}

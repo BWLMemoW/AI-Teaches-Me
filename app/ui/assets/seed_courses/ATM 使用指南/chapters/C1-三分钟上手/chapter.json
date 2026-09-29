@@ -3,5 +3,9 @@
   "id": "C1",
   "title": "三分钟上手",
   "summary": "先把 AI 接上，再创建第一门课。",
-  "lesson_order": ["L1-1"]
+  "lesson_order": [
+    "L1-1",
+    "L1-2",
+    "L1-3"
+  ]
 }

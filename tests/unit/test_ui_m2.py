@@ -93,7 +93,7 @@ def test_study_page_opens_course_and_builds_tree(qtbot, tmp_path: Path) -> None:
         page.open_course(_seed_course(tmp_path))
 
         assert page.lesson_tree.topLevelItemCount() == 1
-        assert page.lesson_tree.topLevelItem(0).childCount() == 1
+        assert page.lesson_tree.topLevelItem(0).childCount() == 2  # 两个章
         assert renderer.blocks and renderer.blocks[0]["type"] == "meta"
         assert "L1-1" in page.title_label.text()
         assert page.persona_combo.count() >= 6  # 内置人设 ≥6（AC-47）

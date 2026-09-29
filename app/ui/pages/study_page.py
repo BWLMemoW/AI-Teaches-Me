@@ -314,6 +314,17 @@ class StudyPage(QWidget):
             self._renderer.render_blocks(list(content.blocks))
         elif content.markdown:
             self._renderer.render_markdown(content.markdown)
+        else:
+            # 空小节（还没生成讲义）：给一个明确的下一步，而不是一片空白
+            self._renderer.render_blocks(
+                [
+                    {"type": "callout", "style": "tip",
+                     "md": f"**这一节还没有讲义。** 点上方「生成讲义」开始（需要已在设置里配置 API）；"
+                           f"生成过程会逐块落盘，可随时停止。"},
+                    {"type": "next_preview", "md": "生成后这里会出现正文、图示、小结与下节预告。"},
+                ]
+            )
+            self.status_label.setText("本节尚未生成讲义：点上方「生成讲义」开始。")
         self._renderer.set_theme(self._css_vars)
         self.complete_button.setEnabled(True)
         self._load_assessment_state(content)

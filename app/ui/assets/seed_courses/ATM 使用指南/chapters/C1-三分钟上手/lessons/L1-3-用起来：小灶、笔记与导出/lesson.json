@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "L1-3",
+  "title": "用起来：小灶、笔记与导出",
+  "status": "not_started",
+  "depth": "minimal",
+  "assessment": {
+    "quiz": "inherit",
+    "self_assessment": "inherit"
+  },
+  "current_version": 0,
+  "versions": [],
+  "human_edited": false,
+  "mastery": null,
+  "quiz_score": null,
+  "started_at": null,
+  "completed_at": null,
+  "time_spent_seconds": 0,
+  "generated_assets": [],
+  "persona": {
+    "id": "default-teacher",
+    "version": 1
+  }
+}

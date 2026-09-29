@@ -159,11 +159,12 @@ def test_lesson_tree_root_has_course_icon(qtbot, tmp_path: Path) -> None:
     root = tree.topLevelItem(0)
     assert root.text(0) == "ATM 使用指南"
     assert root.icon(0).isNull() is False
-    assert root.childCount() == 1  # 章
-    assert root.child(0).childCount() == 1  # 小节
+    assert root.childCount() == 2  # 两个章（M15 扩课）
+    assert root.child(0).childCount() == 3  # C1 现在有 3 节  # 小节
 
     assert tree.select_lesson("L1-1") is True
-    assert tree.next_lesson() is None  # 只有一节
+    nxt = tree.next_lesson()  # M15：扩课后有下一节，标记完成会自动推进
+    assert nxt is not None and "L1-2" in str(nxt)
 
 
 # --- PDF 封面 -------------------------------------------------------------

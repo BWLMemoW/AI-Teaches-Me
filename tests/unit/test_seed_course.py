@@ -35,7 +35,8 @@ def test_course_metadata_matches_schema() -> None:
     assert course["profile"]["depth"] in DEPTH_VALUES
     assert set(course["learning"]) == {"quiz", "self_assessment", "web_search"}
     assert all(value in {"inherit", "on", "off"} for value in course["learning"].values())
-    assert course["stats"]["chapters"] == 1
+    assert course["stats"]["chapters"] == 2  # M15：示例课程扩成 2 章 5 节
+    assert course["stats"]["lessons"] == 5
 
 
 def test_outline_has_chapter_lesson_and_knowledge_points() -> None:
@@ -62,7 +63,7 @@ def test_chapter_and_lesson_metadata() -> None:
     chapter = _load(COURSE_DIR / "chapters" / "C1-三分钟上手" / "chapter.json")
     lesson = _load(LESSON_DIR / "lesson.json")
 
-    assert chapter["lesson_order"] == ["L1-1"]
+    assert chapter["lesson_order"] == ["L1-1", "L1-2", "L1-3"]  # M15：示例课程扩成 2 章 5 节
     assert lesson["id"] == "L1-1"
     assert lesson["status"] in LESSON_STATUSES
     assert lesson["depth"] in DEPTH_VALUES

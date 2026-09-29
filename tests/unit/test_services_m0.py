@@ -143,8 +143,8 @@ def test_scan_courses_finds_seed_course(tmp_path: Path) -> None:
     assert [course.name for course in courses] == ["ATM 使用指南"]
     seed = courses[0]
     assert seed.seed is True
-    assert seed.chapters == 1
-    assert seed.lessons == 1
+    assert seed.chapters == 2
+    assert seed.lessons == 5
     assert seed.completed_lessons == 0
     assert seed.broken is False
     assert seed.progress_ratio == 0.0

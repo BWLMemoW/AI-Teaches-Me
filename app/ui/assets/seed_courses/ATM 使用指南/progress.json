@@ -4,9 +4,38 @@
   "last_lesson": null,
   "streak_days": 0,
   "total_minutes": 0,
-  "updated_at": "2026-09-28T10:00:00+08:00",
+  "updated_at": "2026-09-29T09:00:00+08:00",
   "lessons": {
-    "L1-1": { "status": "not_started", "mastery": null, "quiz_score": null, "minutes": 0 }
+    "L1-1": {
+      "status": "not_started",
+      "mastery": null,
+      "quiz_score": null,
+      "minutes": 0
+    },
+    "L1-2": {
+      "status": "not_started",
+      "mastery": null,
+      "quiz_score": null,
+      "minutes": 0
+    },
+    "L1-3": {
+      "status": "not_started",
+      "mastery": null,
+      "quiz_score": null,
+      "minutes": 0
+    },
+    "L2-1": {
+      "status": "not_started",
+      "mastery": null,
+      "quiz_score": null,
+      "minutes": 0
+    },
+    "L2-2": {
+      "status": "not_started",
+      "mastery": null,
+      "quiz_score": null,
+      "minutes": 0
+    }
   },
   "review_queue": []
 }

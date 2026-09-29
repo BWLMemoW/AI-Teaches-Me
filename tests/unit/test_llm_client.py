@@ -328,3 +328,69 @@ def test_unknown_profile_name_raises_config_error() -> None:
 
     with pytest.raises(ConfigError):
         asyncio.run(_collect(llm, profile="ghost"))
+
+def test_4xx_downgrades_json_schema_to_json_object() -> None:
+    """回归：400 的降级重试曾被注释吞掉（整段成了死代码），让大纲生成必然失败。
+
+    真实场景：DeepSeek 这类 OpenAI 兼容端点只接受 ``json_object``，收到
+    ``json_schema`` 形态的 response_format 会直接 400。
+    """
+
+    def make(count: int):
+        if count == 1:
+            raise _http_error("BadRequestError", 400)
+        return _FakeStream([_chunk("{}")])
+
+    llm, completions, _ = _client(make)
+    pieces = asyncio.run(_collect(llm, json_schema={"name": "outline", "schema": {}}))
+
+    assert pieces == ["{}"]
+    assert len(completions.calls) == 2
+    assert completions.calls[0]["response_format"]["type"] == "json_schema"
+    assert completions.calls[1]["response_format"] == {"type": "json_object"}
+
+
+def test_4xx_ladder_then_drops_response_format_and_keeps_tools() -> None:
+    def make(count: int):
+        if count <= 2:
+            raise _http_error("BadRequestError", 400)
+        return _FakeStream([_chunk("ok")])
+
+    llm, completions, _ = _client(make)
+    tools = [{"type": "function", "function": {"name": "web_search"}}]
+    pieces = asyncio.run(_collect(llm, json_schema={"name": "o", "schema": {}}, tools=tools))
+
+    assert pieces == ["ok"]
+    assert len(completions.calls) == 3
+    assert completions.calls[1]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in completions.calls[2]
+    assert completions.calls[2]["tools"] == tools
+
+
+def test_4xx_ladder_finally_drops_tools_too() -> None:
+    def make(count: int):
+        if count <= 3:
+            raise _http_error("BadRequestError", 400)
+        return _FakeStream([_chunk("ok")])
+
+    llm, completions, _ = _client(make)
+    tools = [{"type": "function", "function": {"name": "web_search"}}]
+    pieces = asyncio.run(_collect(llm, json_schema={"name": "o", "schema": {}}, tools=tools))
+
+    assert pieces == ["ok"]
+    assert len(completions.calls) == 4
+    assert "tools" not in completions.calls[3]
+    assert "response_format" not in completions.calls[3]
+
+
+def test_4xx_ladder_is_bounded_and_then_raises() -> None:
+    from app.core.errors import FatalError
+
+    def make(count: int):
+        raise _http_error("BadRequestError", 400)
+
+    llm, completions, _ = _client(make)
+    with pytest.raises(FatalError):
+        asyncio.run(_collect(llm, json_schema={"name": "o", "schema": {}}))
+    # json_schema → json_object → 无 response_format，共 3 次，不再无限重试
+    assert len(completions.calls) == 3

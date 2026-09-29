@@ -335,7 +335,7 @@ class WizardPage(QWidget):
         self.restart_clarify_button.clicked.connect(lambda: self._start_clarify())
         row.addWidget(self.restart_clarify_button)
         row.addStretch(1)
-        self.clarify_skip_button = QPushButton("跳过，直接生成大纲")
+        self.clarify_skip_button = QPushButton("我已答完，生成大纲")
         self.clarify_skip_button.setProperty("role", "primary")
         self.clarify_skip_button.clicked.connect(self._on_start_generate)
         row.addWidget(self.clarify_skip_button)
@@ -434,10 +434,23 @@ class WizardPage(QWidget):
         self.generate_bar.setRange(0, 0)
         layout.addWidget(self.generate_bar)
 
+        # 失败时留在本页（以前会一闪而过地退回第二步，看起来「点了没用」）
+        self.generate_error_label = QLabel("")
+        self.generate_error_label.setProperty("role", "error")
+        self.generate_error_label.setWordWrap(True)
+        self.generate_error_label.hide()
+        layout.addWidget(self.generate_error_label)
+
         row = QHBoxLayout()
         self.generate_stop_button = QPushButton("停止")
         self.generate_stop_button.clicked.connect(self._on_cancel)
         row.addWidget(self.generate_stop_button)
+        self.generate_retry_button = QPushButton("重试")
+        self.generate_retry_button.clicked.connect(self._on_start_generate)
+        row.addWidget(self.generate_retry_button)
+        self.generate_back_button = QPushButton("返回第二步")
+        self.generate_back_button.clicked.connect(self._back_to_clarify)
+        row.addWidget(self.generate_back_button)
         row.addStretch(1)
         layout.addLayout(row)
         return page
@@ -659,10 +672,17 @@ class WizardPage(QWidget):
             return
         self._draft.clarify_answers = self._clarify_answers_markdown()
         self.generate_output.clear()
+        self.generate_error_label.hide()
         self._token = CancellationToken()
         self.stack.setCurrentIndex(self.STEP_GENERATE)
         self.generate_bar.setRange(0, 0)
         self._pool.start(_GenerateTask(self._service, self._draft, self._token, self._signals))
+
+    @Slot()
+    def _back_to_clarify(self) -> None:
+        """从第三步退回问答页（失败后补充回答用）。"""
+        self._on_cancel()
+        self.stack.setCurrentIndex(self.STEP_CLARIFY)
 
     @Slot()
     def _on_cancel(self) -> None:
@@ -687,6 +707,7 @@ class WizardPage(QWidget):
             return
         if isinstance(payload, CourseOutline):
             self._outline = payload
+            self.generate_error_label.hide()
             self.outline_tree.set_outline(payload)
             issues = self._service.validate(payload)
             self.issues_label.setText(
@@ -703,7 +724,14 @@ class WizardPage(QWidget):
         self._clarify_timer.stop()
         self.generate_bar.setRange(0, 1)
         self.generate_bar.setValue(0)
-        self.stack.setCurrentIndex(self.STEP_CLARIFY if self._outline is None else self.STEP_PREVIEW)
+        if self.stack.currentIndex() == self.STEP_CLARIFY:
+            # 澄清阶段就没成功：留在问答页，错误走状态栏
+            self.status_message.emit(f"生成失败：{message}")
+            return
+        self.generate_error_label.setText(
+            f"生成失败：{message}\n可以点「重试」再试一次，或「返回第二步」补充回答后重新生成。"
+        )
+        self.generate_error_label.show()
         self.status_message.emit(f"生成失败：{message}")
 
     @Slot()
@@ -733,6 +761,7 @@ class WizardPage(QWidget):
         self._clarify_timer.stop()
         self._render_clarify_questions()
         self.generate_output.clear()
+        self.generate_error_label.hide()
         self.outline_tree.clear()
         self.issues_label.clear()
         self.stack.setCurrentIndex(self.STEP_BASIC)

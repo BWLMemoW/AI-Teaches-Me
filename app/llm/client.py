@@ -32,6 +32,10 @@ DEFAULT_BACKOFF_BASE_SECONDS = 0.5
 MAX_BACKOFF_SECONDS = 8.0
 _CANCELLED = object()
 
+# 只有「请求形状不对」的 4xx 才值得换一种写法重试：
+# 401/403 是鉴权问题（按契约立即上报、绝不重试），429 走指数退避。
+DOWNGRADE_STATUSES: frozenset[int] = frozenset({400, 404, 405, 406, 409, 413, 415, 422})
+
 
 @dataclass
 class ConnectionReport:
@@ -103,6 +107,9 @@ class LLMClient:
         api_key = self._require_api_key(resolved)
         model_name = model or resolved.chat_model
         token = cancel if cancel is not None else CancellationToken.never()
+        response_format = (
+            {"type": "json_schema", "json_schema": dict(json_schema)} if json_schema else None
+        )
 
         for attempt in range(1, self.max_attempts + 1):
             if token.cancelled:
@@ -115,7 +122,7 @@ class LLMClient:
                     model_name=model_name,
                     messages=list(messages),
                     tools=tools,
-                    json_schema=json_schema,
+                    response_format=response_format,
                     token=token,
                     temperature=temperature,
                     tool_sink=tool_sink,
@@ -128,7 +135,32 @@ class LLMClient:
                     yield piece
                 return
             except ProviderError as exc:
-                # 422/400 多为「某个可选字段不被端点接受」：用最小请求体自动重试一次（只试一次）                 if not emitted and (exc.status or 0) // 100 == 4 and attempt == 1:                     try:                         async for piece in self._stream_once(                             resolved=resolved, api_key=api_key, model_name=model_name,                             messages=list(messages), tools=None, json_schema=None, token=token,                             temperature=temperature, tool_sink=tool_sink, course_id=course_id,                             lesson_id=lesson_id, agent=agent, task=task,                         ):                             emitted = True                             yield piece                     except ProviderError:                         pass                     else:                         return
+                # 4xx 多半是「某个可选字段不被这个 OpenAI 兼容端点接受」（例如 json_schema
+                # 形态的 response_format）。此时按「保留语义、逐步减配」的顺序再试一次。
+                if not emitted and exc.status in DOWNGRADE_STATUSES and attempt == 1:
+                    for candidate_format, candidate_tools in self._downgrades(response_format, tools):
+                        try:
+                            async for piece in self._stream_once(
+                                resolved=resolved,
+                                api_key=api_key,
+                                model_name=model_name,
+                                messages=list(messages),
+                                tools=candidate_tools,
+                                response_format=candidate_format,
+                                token=token,
+                                temperature=temperature,
+                                tool_sink=tool_sink,
+                                course_id=course_id,
+                                lesson_id=lesson_id,
+                                agent=agent,
+                                task=task,
+                            ):
+                                emitted = True
+                                yield piece
+                        except ProviderError:
+                            continue
+                        else:
+                            return
                 if not exc.retryable or emitted or attempt >= self.max_attempts:
                     raise
                 delay = min(self.backoff_base * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)
@@ -280,6 +312,27 @@ class LLMClient:
         finally:
             await _maybe_aclose(client)
 
+    @staticmethod
+    def _downgrades(
+        response_format: Mapping[str, Any] | None,
+        tools: Sequence[Mapping[str, Any]] | None,
+    ) -> list[tuple[Mapping[str, Any] | None, Sequence[Mapping[str, Any]] | None]]:
+        """4xx 降级阶梯：先只换 ``response_format``，实在不行才放弃 tools。
+
+        顺序固定为「json_object 形态 → 完全不带 response_format → 再丢 tools」，
+        每一步都保留其余请求参数，避免把问题从一个字段转移到另一个字段。
+        """
+        ladder: list[tuple[Mapping[str, Any] | None, Sequence[Mapping[str, Any]] | None]] = []
+        if response_format is not None and response_format.get("type") == "json_schema":
+            ladder.append(({"type": "json_object"}, tools))
+        ladder.append((None, tools))
+        if tools:
+            ladder.append((None, None))
+        unique: list[tuple[Mapping[str, Any] | None, Sequence[Mapping[str, Any]] | None]] = []
+        for item in ladder:
+            if item not in unique:
+                unique.append(item)
+        return unique
     async def _stream_once(
         self,
         *,
@@ -288,7 +341,7 @@ class LLMClient:
         model_name: str,
         messages: list[Mapping[str, Any]],
         tools: Sequence[Mapping[str, Any]] | None,
-        json_schema: Mapping[str, Any] | None,
+        response_format: Mapping[str, Any] | None,
         token: CancellationToken,
         temperature: float | None,
         tool_sink: list[dict[str, Any]] | None,
@@ -307,8 +360,8 @@ class LLMClient:
             kwargs["max_tokens"] = resolved.max_tokens
         if tools:
             kwargs["tools"] = list(tools)
-        if json_schema:
-            kwargs["response_format"] = {"type": "json_schema", "json_schema": dict(json_schema)}
+        if response_format:
+            kwargs["response_format"] = dict(response_format)
 
         reported_usage = False
         try:

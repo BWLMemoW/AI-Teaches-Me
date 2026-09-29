@@ -178,3 +178,37 @@ def test_free_form_fallback_keeps_single_box(qtbot, tmp_path: Path) -> None:
         assert page._clarify_answers_markdown() == "我想先补基础"
     finally:
         services.index.close()
+
+def test_answers_button_label(qtbot, tmp_path: Path) -> None:
+    """主人指定的按钮文案。"""
+    services = _services(tmp_path, [SAMPLE, _outline_json()])
+    page = WizardPage(services.outline)
+    qtbot.addWidget(page)
+    try:
+        assert page.clarify_skip_button.text() == "我已答完，生成大纲"
+    finally:
+        services.index.close()
+
+
+def test_generation_failure_stays_on_third_step(qtbot, tmp_path: Path) -> None:
+    """回归：生成失败时曾经一闪而过地退回第二步，看起来像「点了没用」。"""
+    services = _services(tmp_path, [SAMPLE, "这不是 JSON"])
+    page = WizardPage(services.outline)
+    qtbot.addWidget(page)
+    try:
+        page.name_edit.setText("失败也要看得见")
+        page.basic_next_button.click()
+        qtbot.waitUntil(lambda: len(page.clarify_answer_edits) >= 1, timeout=10000)
+        page.clarify_answer_edits[0].setPlainText("零基础")
+        page.clarify_skip_button.click()
+        qtbot.waitUntil(lambda: page.generate_error_label.text() != "", timeout=20000)
+
+        assert page.stack.currentIndex() == WizardPage.STEP_GENERATE  # 停在第三步，不再弹回
+        assert "生成失败" in page.generate_error_label.text()
+        assert page.generate_error_label.isVisibleTo(page)
+        assert page.generate_retry_button.text() == "重试"
+
+        page.generate_back_button.click()
+        assert page.stack.currentIndex() == WizardPage.STEP_CLARIFY
+    finally:
+        services.index.close()

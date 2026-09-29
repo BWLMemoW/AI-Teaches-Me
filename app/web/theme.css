@@ -4,14 +4,14 @@
 /* 默认（樱花 · 明色）：未设置 data-theme 时的兜底变量 */
 :root {
   --atm-accent: #6C8AE4;
-  --atm-bg: #FDF7F9;
+  --atm-bg: #F7F7F9;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #FBEEF3;
-  --atm-border: #EADCE3;
-  --atm-code-bg: #F6F1F4;
-  --atm-danger: #D9534F;
+  --atm-bg-soft: #F1F1F4;
+  --atm-border: #E4E4E8;
+  --atm-code-bg: #F6F8FA;
+  --atm-danger: #D14343;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
   --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
@@ -26,26 +26,26 @@
   --atm-radius-small: 8px;
   --atm-size-base: 14px;
   --atm-size-body: 16px;
-  --atm-success: #3FA46A;
+  --atm-success: #2F9E63;
   --atm-surface: #FFFFFF;
-  --atm-surface-alt: #F7F2F4;
-  --atm-text: #2B2430;
-  --atm-text-dim: #5C5566;
-  --atm-text-muted: #8A8394;
+  --atm-surface-alt: #F4F4F7;
+  --atm-text: #1F2328;
+  --atm-text-dim: #57606A;
+  --atm-text-muted: #8B949E;
   --atm-theme: sakura;
-  --atm-warning: #D9922B;
+  --atm-warning: #D68A20;
 }
 
 /* 深空 · 明色 */
 [data-theme="deepspace"][data-mode="light"] {
   --atm-accent: #8A6BE0;
-  --atm-bg: #F4F6FB;
+  --atm-bg: #F7F7F9;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #E9EDF7;
-  --atm-border: #DDE3F1;
-  --atm-code-bg: #EEF1F9;
+  --atm-bg-soft: #F1F1F4;
+  --atm-border: #E4E4E8;
+  --atm-code-bg: #F6F8FA;
   --atm-danger: #CE5A57;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
@@ -61,12 +61,12 @@
   --atm-radius-small: 8px;
   --atm-size-base: 14px;
   --atm-size-body: 16px;
-  --atm-success: #3E9E6A;
+  --atm-success: #2F9E63;
   --atm-surface: #FFFFFF;
-  --atm-surface-alt: #EEF1F9;
-  --atm-text: #1B2033;
-  --atm-text-dim: #4C5570;
-  --atm-text-muted: #7B8499;
+  --atm-surface-alt: #F4F4F7;
+  --atm-text: #1F2328;
+  --atm-text-dim: #57606A;
+  --atm-text-muted: #8B949E;
   --atm-theme: deepspace;
   --atm-warning: #C98A22;
 }
@@ -74,13 +74,13 @@
 /* 深空 · 暗色 */
 [data-theme="deepspace"][data-mode="dark"] {
   --atm-accent: #B49BFF;
-  --atm-bg: #0E1120;
+  --atm-bg: #15171C;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #141830;
-  --atm-border: #2A3149;
-  --atm-code-bg: #141830;
+  --atm-bg-soft: #1B1E24;
+  --atm-border: #2E343D;
+  --atm-code-bg: #1B1E24;
   --atm-danger: #F0807C;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
@@ -97,11 +97,11 @@
   --atm-size-base: 14px;
   --atm-size-body: 16px;
   --atm-success: #5FC48A;
-  --atm-surface: #171B2C;
-  --atm-surface-alt: #1F2439;
-  --atm-text: #E8ECFB;
-  --atm-text-dim: #BFC7E4;
-  --atm-text-muted: #8891AF;
+  --atm-surface: #20242B;
+  --atm-surface-alt: #262B33;
+  --atm-text: #E6E8EC;
+  --atm-text-dim: #B6BCC6;
+  --atm-text-muted: #8B93A1;
   --atm-theme: deepspace;
   --atm-warning: #E0B159;
 }
@@ -109,13 +109,13 @@
 /* 纸感 · 明色 */
 [data-theme="paper"][data-mode="light"] {
   --atm-accent: #4F7A6F;
-  --atm-bg: #FBF7F0;
+  --atm-bg: #F7F7F9;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #F4EEE3;
-  --atm-border: #E6DCCB;
-  --atm-code-bg: #F4EFE6;
+  --atm-bg-soft: #F1F1F4;
+  --atm-border: #E4E4E8;
+  --atm-code-bg: #F6F8FA;
   --atm-danger: #C0554E;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
@@ -131,12 +131,12 @@
   --atm-radius-small: 8px;
   --atm-size-base: 14px;
   --atm-size-body: 16px;
-  --atm-success: #4C8C5A;
+  --atm-success: #2F9E63;
   --atm-surface: #FFFFFF;
-  --atm-surface-alt: #F7F2E8;
-  --atm-text: #2E2A24;
-  --atm-text-dim: #5F584E;
-  --atm-text-muted: #8C8478;
+  --atm-surface-alt: #F4F4F7;
+  --atm-text: #1F2328;
+  --atm-text-dim: #57606A;
+  --atm-text-muted: #8B949E;
   --atm-theme: paper;
   --atm-warning: #C98A22;
 }
@@ -144,13 +144,13 @@
 /* 纸感 · 暗色 */
 [data-theme="paper"][data-mode="dark"] {
   --atm-accent: #7FB3A5;
-  --atm-bg: #201D19;
+  --atm-bg: #15171C;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #262320;
-  --atm-border: #3E3833;
-  --atm-code-bg: #262220;
+  --atm-bg-soft: #1B1E24;
+  --atm-border: #2E343D;
+  --atm-code-bg: #1B1E24;
   --atm-danger: #E07B74;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
@@ -166,12 +166,12 @@
   --atm-radius-small: 8px;
   --atm-size-base: 14px;
   --atm-size-body: 16px;
-  --atm-success: #6FAF78;
-  --atm-surface: #2B2724;
-  --atm-surface-alt: #332E2A;
-  --atm-text: #F4EFE7;
-  --atm-text-dim: #CFC7BB;
-  --atm-text-muted: #9C9488;
+  --atm-success: #4CBF86;
+  --atm-surface: #20242B;
+  --atm-surface-alt: #262B33;
+  --atm-text: #E6E8EC;
+  --atm-text-dim: #B6BCC6;
+  --atm-text-muted: #8B93A1;
   --atm-theme: paper;
   --atm-warning: #D8A85A;
 }
@@ -179,14 +179,14 @@
 /* 樱花 · 明色 */
 [data-theme="sakura"][data-mode="light"] {
   --atm-accent: #6C8AE4;
-  --atm-bg: #FDF7F9;
+  --atm-bg: #F7F7F9;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #FBEEF3;
-  --atm-border: #EADCE3;
-  --atm-code-bg: #F6F1F4;
-  --atm-danger: #D9534F;
+  --atm-bg-soft: #F1F1F4;
+  --atm-border: #E4E4E8;
+  --atm-code-bg: #F6F8FA;
+  --atm-danger: #D14343;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
   --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
@@ -201,27 +201,27 @@
   --atm-radius-small: 8px;
   --atm-size-base: 14px;
   --atm-size-body: 16px;
-  --atm-success: #3FA46A;
+  --atm-success: #2F9E63;
   --atm-surface: #FFFFFF;
-  --atm-surface-alt: #F7F2F4;
-  --atm-text: #2B2430;
-  --atm-text-dim: #5C5566;
-  --atm-text-muted: #8A8394;
+  --atm-surface-alt: #F4F4F7;
+  --atm-text: #1F2328;
+  --atm-text-dim: #57606A;
+  --atm-text-muted: #8B949E;
   --atm-theme: sakura;
-  --atm-warning: #D9922B;
+  --atm-warning: #D68A20;
 }
 
 /* 樱花 · 暗色 */
 [data-theme="sakura"][data-mode="dark"] {
   --atm-accent: #8FA8F0;
-  --atm-bg: #1B1720;
+  --atm-bg: #15171C;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #221D29;
-  --atm-border: #3A3244;
-  --atm-code-bg: #211C28;
-  --atm-danger: #F0807C;
+  --atm-bg-soft: #1B1E24;
+  --atm-border: #2E343D;
+  --atm-code-bg: #1B1E24;
+  --atm-danger: #F0736F;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
   --atm-font-ui: "Microsoft YaHei", "微软雅黑", "Segoe UI", sans-serif;
@@ -236,26 +236,26 @@
   --atm-radius-small: 8px;
   --atm-size-base: 14px;
   --atm-size-body: 16px;
-  --atm-success: #62C08A;
-  --atm-surface: #26212E;
-  --atm-surface-alt: #2E2837;
-  --atm-text: #F2EDF6;
-  --atm-text-dim: #CFC7D8;
-  --atm-text-muted: #9A93A6;
+  --atm-success: #4CBF86;
+  --atm-surface: #20242B;
+  --atm-surface-alt: #262B33;
+  --atm-text: #E6E8EC;
+  --atm-text-dim: #B6BCC6;
+  --atm-text-muted: #8B93A1;
   --atm-theme: sakura;
-  --atm-warning: #E5B25C;
+  --atm-warning: #E0B159;
 }
 
 /* 森林 · 明色 */
 [data-theme="forest"][data-mode="light"] {
   --atm-accent: #A8792E;
-  --atm-bg: #F5F8F3;
+  --atm-bg: #F7F7F9;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #EBF1E7;
-  --atm-border: #DCE6D6;
-  --atm-code-bg: #EEF3EA;
+  --atm-bg-soft: #F1F1F4;
+  --atm-border: #E4E4E8;
+  --atm-code-bg: #F6F8FA;
   --atm-danger: #BF5A50;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
@@ -271,12 +271,12 @@
   --atm-radius-small: 8px;
   --atm-size-base: 14px;
   --atm-size-body: 16px;
-  --atm-success: #3F7D4E;
+  --atm-success: #2F9E63;
   --atm-surface: #FFFFFF;
-  --atm-surface-alt: #EFF4EC;
-  --atm-text: #21291F;
-  --atm-text-dim: #4E5A4A;
-  --atm-text-muted: #7C877A;
+  --atm-surface-alt: #F4F4F7;
+  --atm-text: #1F2328;
+  --atm-text-dim: #57606A;
+  --atm-text-muted: #8B949E;
   --atm-theme: forest;
   --atm-warning: #B98A25;
 }
@@ -284,13 +284,13 @@
 /* 森林 · 暗色 */
 [data-theme="forest"][data-mode="dark"] {
   --atm-accent: #D3A85E;
-  --atm-bg: #131A15;
+  --atm-bg: #15171C;
   --atm-bg-blur: 0;
   --atm-bg-dim: 0;
   --atm-bg-image: none;
-  --atm-bg-soft: #18211B;
-  --atm-border: #2C3A31;
-  --atm-code-bg: #18211B;
+  --atm-bg-soft: #1B1E24;
+  --atm-border: #2E343D;
+  --atm-code-bg: #1B1E24;
   --atm-danger: #E08679;
   --atm-font-code: "JetBrains Mono", Consolas, "Courier New", monospace;
   --atm-font-reading: "Source Han Serif SC", "思源宋体", serif;
@@ -307,11 +307,11 @@
   --atm-size-base: 14px;
   --atm-size-body: 16px;
   --atm-success: #6FBE84;
-  --atm-surface: #1C2620;
-  --atm-surface-alt: #243027;
-  --atm-text: #E6F0E7;
-  --atm-text-dim: #B9C9BB;
-  --atm-text-muted: #86988A;
+  --atm-surface: #20242B;
+  --atm-surface-alt: #262B33;
+  --atm-text: #E6E8EC;
+  --atm-text-dim: #B6BCC6;
+  --atm-text-muted: #8B93A1;
   --atm-theme: forest;
   --atm-warning: #D9B161;
 }

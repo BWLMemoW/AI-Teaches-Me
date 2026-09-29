@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QStackedWidget,
     QStatusBar,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -88,12 +89,32 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(central)
         layout.setContentsMargins(12, 12, 12, 8)
 
+        # 左侧：品牌标题 + 导航（QSS 里用 #NavList 定制选中态）+ 版本号
+        sidebar = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(14, 16, 14, 12)
+        sidebar_layout.setSpacing(10)
+
+        brand = QLabel("AI Teaches Me")
+        brand.setProperty("role", "title")
+        sidebar_layout.addWidget(brand)
+        brand_note = QLabel("AI 驱动的个性化自学平台")
+        brand_note.setProperty("role", "muted")
+        sidebar_layout.addWidget(brand_note)
+
         self.nav = QListWidget()
-        self.nav.setFixedWidth(170)
+        self.nav.setObjectName("NavList")
+        self.nav.setFixedWidth(196)
+        self.nav.setFrameShape(QListWidget.Shape.NoFrame)
         for label in ("课程库", "新建课程", "学习台", "小灶", "笔记中心", "设置"):
             self.nav.addItem(QListWidgetItem(label))
         self.nav.currentRowChanged.connect(self._on_nav_changed)
-        layout.addWidget(self.nav)
+        sidebar_layout.addWidget(self.nav, 1)
+
+        version = QLabel("v0.2.0")
+        version.setProperty("role", "muted")
+        sidebar_layout.addWidget(version)
+        layout.addWidget(sidebar)
 
         self.stack = QStackedWidget()
         self.library_page = LibraryPage(result.layout.courses, service=self._services.library)

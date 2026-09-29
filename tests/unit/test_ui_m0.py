@@ -292,8 +292,11 @@ def test_main_window_wires_pages_and_theme(qtbot, tmp_path: Path) -> None:
     from PySide6.QtWidgets import QApplication
 
     qss = QApplication.instance().styleSheet() or ""
-    # 深空主题背景（明色 / 暗色各一套，跟随系统；离屏环境通常报 light）
-    assert "#F4F6FB" in qss or "#0E1120" in qss
+    # 按 token 断言（调色板会随设计改版微调，不能写死颜色值）
+    from app.ui.theme.presets import PRESETS
+
+    deepspace = PRESETS["deepspace"]
+    assert deepspace.light.primary in qss or deepspace.dark.primary in qss
     assert renderer.themes[-1]["--atm-theme"] == "deepspace"
 
 

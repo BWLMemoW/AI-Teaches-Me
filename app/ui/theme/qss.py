@@ -102,6 +102,15 @@ def theme_css(background: Background | None = None) -> str:
     return header + "".join(blocks)
 
 
+def _rgba(hex_color: str, alpha: float) -> str:
+    """``#RRGGBB`` → ``rgba(r, g, b, a)``（QSS 不做透明度混合，只能自己算）。"""
+    text = str(hex_color).lstrip("#")
+    if len(text) != 6:
+        return hex_color
+    r, g, b = (int(text[index : index + 2], 16) for index in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha:.2f})"
+
+
 def build_qss(
     theme: Theme,
     mode: str = "light",
@@ -109,91 +118,156 @@ def build_qss(
     font_size: int | None = None,
     reading_width: int | None = None,
 ) -> str:
-    """把 token 渲染成 Qt 样式表。"""
+    """把 token 渲染成 Qt 样式表（v2：中性底 + 单一强调色 + 统一间距与控件高度）。"""
     c = theme.colors(mode)
     base = font_size or theme.font.base_size
-    small = max(11, base - 2)
-    title = base + 6
+    small = max(11, base - 1)
+    title = base + 7
     width = reading_width or 820
+    tint = lambda alpha: _rgba(c.primary, alpha)  # noqa: E731 - 局部小助手
     return f"""
-/* AI Teaches Me · {theme.name}（{mode}）—— 生成的 QSS，请勿手工改数值 */
+/* AI Teaches Me · {theme.name}（{mode}）· 生成的 QSS v2，请勿手工改数值 */
 QWidget {{
-  background-color: {c.bg};
   color: {c.text};
   font-family: {theme.font.ui_family};
   font-size: {base}px;
 }}
-QMainWindow, QDialog {{ background-color: {c.bg}; }}
-/* 关键：QLabel 必须透明，否则全局 QWidget 背景会在每行文字后面刷出一条底纹 */
+QMainWindow, QDialog, QStackedWidget, QScrollArea, QAbstractScrollArea, QSplitter {{
+  background-color: {c.bg};
+}}
+QScrollArea > QWidget > QWidget {{ background: transparent; }}
+/* 文字控件一律透明：否则全局底色会在每行文字后刷出一条底纹 */
 QLabel {{ background-color: transparent; }}
+QCheckBox, QRadioButton {{ background-color: transparent; }}
 QLabel[role="title"] {{ font-size: {title}px; font-weight: 600; }}
-QLabel[role="subtitle"] {{ color: {c.text_dim}; }}
+QLabel[role="subtitle"] {{ color: {c.text_dim}; font-weight: 600; }}
 QLabel[role="muted"] {{ color: {c.text_muted}; font-size: {small}px; }}
 QLabel[role="error"] {{ color: {c.danger}; }}
+
+/* 分组：不用描边方框，只用「标题 + 细分隔线」表达层级 */
+QGroupBox {{
+  border: none;
+  border-top: 1px solid {c.border};
+  margin-top: 20px;
+  padding-top: 10px;
+  font-weight: 600;
+  color: {c.text_dim};
+}}
+QGroupBox::title {{
+  subcontrol-origin: margin;
+  subcontrol-position: top left;
+  left: 0px;
+  padding: 0 4px 0 0;
+}}
 QFrame[role="card"] {{
   background-color: {c.surface};
   border: 1px solid {c.border};
   border-radius: {theme.radius.card}px;
 }}
 QFrame[role="separator"] {{ background-color: {c.border}; max-height: 1px; }}
+
+/* 按钮：默认（描边）/ 主按钮（实心）/ 幽灵 / 危险 */
 QPushButton {{
-  background-color: {c.surface_alt};
+  background-color: {c.surface};
   color: {c.text};
   border: 1px solid {c.border};
   border-radius: {theme.radius.button}px;
-  padding: 6px 14px;
+  padding: 5px 14px;
+  min-height: 22px;
 }}
-QPushButton:hover {{ background-color: {c.bg_soft}; border-color: {c.primary}; }}
-QPushButton:disabled {{ color: {c.text_muted}; border-color: {c.border}; }}
-QPushButton[role="primary"] {{
-  background-color: {c.primary};
-  border-color: {c.primary};
-  color: #FFFFFF;
-}}
+QPushButton:hover {{ background-color: {c.surface_alt}; border-color: {c.primary}; }}
+QPushButton:pressed {{ background-color: {c.bg_soft}; }}
+QPushButton:disabled {{ color: {c.text_muted}; border-color: {c.border}; background-color: {c.surface_alt}; }}
+QPushButton[role="primary"] {{ background-color: {c.primary}; border-color: {c.primary}; color: #FFFFFF; font-weight: 600; }}
 QPushButton[role="primary"]:hover {{ background-color: {c.primary_hover}; }}
-QPushButton[role="danger"] {{ color: {c.danger}; border-color: {c.danger}; }}
-QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+QPushButton[role="ghost"] {{ background-color: transparent; border-color: transparent; color: {c.text_dim}; }}
+QPushButton[role="ghost"]:hover {{ background-color: {c.surface_alt}; color: {c.text}; }}
+QPushButton[role="danger"] {{ color: {c.danger}; border-color: {_rgba(c.danger, 0.45)}; background-color: transparent; }}
+QPushButton[role="danger"]:hover {{ background-color: {_rgba(c.danger, 0.10)}; }}
+
+/* 输入控件：统一高度与焦点环 */
+QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
   background-color: {c.surface};
   border: 1px solid {c.border};
   border-radius: {theme.radius.small}px;
-  padding: 6px 8px;
-  selection-background-color: {c.primary};
-  selection-color: #FFFFFF;
+  padding: 5px 8px;
+  min-height: 22px;
+  selection-background-color: {tint(0.25)};
+  selection-color: {c.text};
 }}
-QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {{
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
   border-color: {c.primary};
 }}
+QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled {{ background-color: {c.surface_alt}; color: {c.text_muted}; }}
+QComboBox::drop-down {{ border: none; width: 22px; }}
+QComboBox QAbstractItemView {{
+  background-color: {c.surface};
+  border: 1px solid {c.border};
+  border-radius: 8px;
+  selection-background-color: {tint(0.16)};
+  selection-color: {c.text};
+  padding: 4px;
+}}
+
+/* 左侧导航 */
+QListWidget#NavList {{
+  background-color: {c.surface_alt};
+  border: none;
+  border-radius: 12px;
+  padding: 8px;
+  outline: none;
+}}
+QListWidget#NavList::item {{
+  height: 34px;
+  border-radius: 8px;
+  padding-left: 12px;
+  color: {c.text_dim};
+}}
+QListWidget#NavList::item:hover {{ background-color: {tint(0.08)}; color: {c.text}; }}
+QListWidget#NavList::item:selected {{ background-color: {tint(0.14)}; color: {c.primary}; font-weight: 600; }}
+
+/* 列表 / 树 */
 QListWidget, QTreeWidget, QTreeView, QListView {{
   background-color: {c.surface};
   border: 1px solid {c.border};
-  border-radius: {theme.radius.small}px;
+  border-radius: 10px;
+  padding: 4px;
+  outline: none;
 }}
-QListWidget::item, QTreeWidget::item {{ padding: 4px 6px; }}
+QTreeWidget::item, QListView::item {{ height: 26px; border-radius: 6px; }}
 QListWidget::item:selected, QTreeWidget::item:selected, QListView::item:selected {{
-  background-color: {c.bg_soft};
+  background-color: {tint(0.12)};
   color: {c.text};
 }}
-QTabBar::tab {{ background: transparent; color: {c.text_dim}; padding: 6px 12px; }}
-QTabBar::tab:selected {{ color: {c.primary}; border-bottom: 2px solid {c.primary}; }}
-QStatusBar {{ color: {c.text_muted}; font-size: {small}px; }}
-QToolTip {{ background-color: {c.surface}; color: {c.text}; border: 1px solid {c.border}; }}
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
-QScrollBar::handle:vertical {{ background: {c.border}; border-radius: 5px; min-height: 24px; }}
-QScrollBar::handle:vertical:hover {{ background: {c.primary}; }}
+
+/* 标签页与菜单 */
+QTabWidget::pane {{ border: 1px solid {c.border}; border-radius: 12px; top: 6px; }}
+QTabBar::tab {{ padding: 7px 16px; margin-right: 4px; border-radius: 8px; color: {c.text_dim}; }}
+QTabBar::tab:hover {{ background-color: {c.surface_alt}; color: {c.text}; }}
+QTabBar::tab:selected {{ background-color: {tint(0.14)}; color: {c.primary}; font-weight: 600; }}
+QMenu {{ background-color: {c.surface}; border: 1px solid {c.border}; border-radius: 10px; padding: 6px; }}
+QMenu::item {{ padding: 6px 18px; border-radius: 6px; }}
+QMenu::item:selected {{ background-color: {tint(0.14)}; color: {c.text}; }}
+
+/* 进度与滚动条 */
+QProgressBar {{ background-color: {c.bg_soft}; border: none; border-radius: 3px; text-align: center; }}
+QProgressBar::chunk {{ background-color: {c.primary}; border-radius: 3px; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: {_rgba(c.text_muted, 0.45)}; border-radius: 5px; min-height: 28px; }}
+QScrollBar::handle:vertical:hover {{ background: {_rgba(c.text_muted, 0.70)}; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+QScrollBar::handle:horizontal {{ background: {_rgba(c.text_muted, 0.45)}; border-radius: 5px; min-width: 28px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
-QProgressBar {{
-  border: 1px solid {c.border};
-  border-radius: {theme.radius.small}px;
-  text-align: center;
-  background-color: {c.surface};
-}}
-QProgressBar::chunk {{ background-color: {c.primary}; border-radius: {theme.radius.small}px; }}
-QCheckBox, QRadioButton {{ spacing: 6px; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+
+QStatusBar {{ background-color: {c.surface}; color: {c.text_muted}; border-top: 1px solid {c.border}; font-size: {small}px; }}
 QSplitter::handle {{ background-color: {c.border}; }}
+QSplitter::handle:horizontal {{ width: 1px; }}
+QToolTip {{ background-color: {c.surface}; color: {c.text}; border: 1px solid {c.border}; padding: 4px 6px; }}
+QCheckBox, QRadioButton {{ spacing: 7px; }}
 /* 阅读区宽度（§11.1：正文阅读宽度可调，默认 {width}px） */
 QTextBrowser[role="reading"], QWidget[role="reading"] {{ max-width: {width}px; }}
 """
-
 
 def apply_theme(
     app: Any,

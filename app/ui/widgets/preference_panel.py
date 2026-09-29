@@ -187,6 +187,12 @@ class PreferencePanel(QWidget):
         hint_learning.setWordWrap(True)
         form.addRow("", hint_learning)
 
+        self.allow_tools_check = QCheckBox(
+            "允许 Agent 调用工具（联网 / 读资料 / 画图）；端点不支持 function calling 时保持关闭"
+        )
+        self.allow_tools_check.toggled.connect(self._save)
+        form.addRow("", self.allow_tools_check)
+
         self.throttle_spin = QSpinBox()
         self.throttle_spin.setRange(30, 60)
         self.throttle_spin.setSuffix(" ms")
@@ -336,6 +342,7 @@ class PreferencePanel(QWidget):
             (self.quiz_check, generation.quiz_enabled),
             (self.self_assessment_check, generation.self_assessment_enabled),
             (self.review_check, generation.svg_review.enabled),
+            (self.allow_tools_check, generation.allow_tools),
         ):
             widget.blockSignals(True)
             widget.setChecked(bool(value))
@@ -404,6 +411,7 @@ class PreferencePanel(QWidget):
         generation.quiz_enabled = self.quiz_check.isChecked()
         generation.self_assessment_enabled = self.self_assessment_check.isChecked()
         generation.svg_review.enabled = self.review_check.isChecked()
+        generation.allow_tools = self.allow_tools_check.isChecked()
         generation.svg_review.max_rounds = int(self.rounds_spin.value())
         generation.stream_throttle_ms = int(self.throttle_spin.value())
 

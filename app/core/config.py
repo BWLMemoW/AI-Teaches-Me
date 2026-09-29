@@ -174,6 +174,8 @@ class GenerationConfig(BaseModel):
     auto_note_on_complete: bool = True
     quiz_enabled: bool = True
     self_assessment_enabled: bool = True
+    # 是否允许 Agent 调用工具（function calling）。默认关闭：部分 OpenAI 兼容端点会以 422 拒绝 tools 载荷
+    allow_tools: bool = False
     svg_review: SvgReviewConfig = Field(default_factory=SvgReviewConfig)
     # §2.8：流式回调节流 30–60ms
     stream_throttle_ms: int = 40

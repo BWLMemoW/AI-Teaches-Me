@@ -490,6 +490,9 @@ class StudyPage(QWidget):
         """装配工具：图示 / 动画 / 读图 / 笔记 / 联网 + **人设工具白名单交集**（§10.6）。"""
         if self._services is None or self._lesson_dir is None:
             return None, None
+        # 工具循环默认关闭（见生成偏好）：有些端点不支持 tools，带上就会被 422 拒绝
+        if not bool(getattr(self._services.config.generation, "allow_tools", False)):
+            return None, None
         client = getattr(self._services, "client", None)
         persona = self._current_persona()
         vision = None

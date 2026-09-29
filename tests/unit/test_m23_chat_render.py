@@ -46,7 +46,7 @@ def test_rich_elements_are_real_html(qtbot) -> None:
     drawer.feed_answer_piece(_ndjson({"type": "code", "lang": "python", "code": "x = 1"}))
     drawer.end_answer()
 
-    html = drawer.history._bubbles[0].text.text()
+    html = "\n".join(drawer.history._bubbles[0].html_parts)
     assert "<table" in html
     assert "对齐基" in html
     assert "monospace" in html  # 代码块内联了等宽字体
@@ -217,3 +217,55 @@ def test_study_page_zoom_opens_document_window(qtbot, tmp_path, monkeypatch) -> 
         assert opened and "这是什么？" in opened[0]
     finally:
         services.index.close()
+
+SVG_SAMPLE = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 120" width="320" height="120">'
+    '<rect width="320" height="120" fill="#EAF3FF"/>'
+    '<text x="16" y="40" font-size="18" fill="#1F3A5F">思维导图</text>'
+    '<text x="16" y="80" font-size="14" fill="#1F3A5F">岗位定位 / 协作 / 产出</text>'
+    "</svg>"
+)
+
+
+def test_svg_block_is_drawn_as_image(qtbot) -> None:
+    """回归：模型按要求画了图，但 diagram 块没有渲染分支 → 气泡里「图呢？」。"""
+    from PySide6.QtWidgets import QLabel
+
+    from app.ui.widgets.chat_drawer import ChatDrawer
+
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+    drawer.begin_answer()
+    drawer.feed_answer_piece(
+        _ndjson({"type": "diagram", "kind": "svg", "title": "思维导图", "content": SVG_SAMPLE})
+    )
+    drawer.end_answer()
+
+    bubble = drawer.history._bubbles[0]
+    pixmaps = [
+        label.pixmap()
+        for label in bubble.findChildren(QLabel)
+        if label.pixmap() is not None and not label.pixmap().isNull()
+    ]
+    assert pixmaps, "SVG 块必须被真的画成图片"
+    assert pixmaps[0].width() > 0 and pixmaps[0].height() > 0
+    assert "图示" in bubble.to_plain_text()
+    assert '{"type"' not in drawer.history.toPlainText()
+
+
+def test_mermaid_block_shows_source_instead_of_disappearing(qtbot) -> None:
+    """本项目没有离线 mermaid 渲染器：至少要把源码显示出来，不能整块消失。"""
+    from app.ui.widgets.chat_drawer import ChatDrawer
+
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+    drawer.begin_answer()
+    drawer.feed_answer_piece(
+        _ndjson({"type": "diagram", "kind": "mermaid", "content": "graph TD\n  A-->B"})
+    )
+    drawer.end_answer()
+
+    plain = drawer.history.toPlainText()
+    assert "graph TD" in plain
+    assert "A-->B" in plain
+    assert "mermaid" in plain.lower()

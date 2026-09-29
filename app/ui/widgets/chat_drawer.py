@@ -1,19 +1,23 @@
 """追问抽屉（《项目文档》§4.7 FR-07、§11.4 ``ChatDrawer``）。
 
-M23 起改成**气泡式对话**：
-* 用户的追问靠右（主色浅底），老师的回答靠左（面板色底），像普通聊天应用；
-* 老师回答渲染 Markdown（标题/列表/表格/代码块）——模型流式吐 NDJSON，
-  解析成内容块后逐块转 Markdown，同一个气泡里原地更新（块级流式）；
-* 记录区整块不可获焦、不可编辑，避免被当成输入框；输入框在下方与发送按钮同行；
-* 内部维护 Markdown 源，供「放大」窗口与导出保留结构。
+气泡式对话（M23 起）：
+* 用户的追问靠右（主色浅底），老师的回答靠左（面板色底）；
+* 老师回答**按内容块渲染**：文字块走 Markdown，`svg` / `diagram(kind=svg)` / `image`
+  块会被**离屏栅格化成图片真的画出来**（纯本地，无 CDN）；
+* 模型流式吐 NDJSON → 解析成内容块 → 同一个气泡原地刷新；
+* 记录区只读、不可获焦；输入框在下方与发送按钮同行；支持「放大」到独立窗口。
 """
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping, Sequence
 from html import escape
+from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QTextDocument
+from PySide6.QtGui import QPixmap, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -27,11 +31,16 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.models import ContentBlock
+from ...infra.svg_renderer import render_svg_png
+from ...infra.svg_sanitizer import clean, is_acceptable
 from ...llm.stream import BlockStreamParser
 
 CODE_FONT = "'JetBrains Mono', Consolas, 'Courier New', monospace"
 CODE_BG = "#F2F4F7"
 ROLE_PREFIX = {"user": "我：", "assistant": "老师："}
+DIAGRAM_SOURCE_WIDTH = 1040  # SVG 栅格化宽度（2× 显示宽度，保证清晰）
+DIAGRAM_DISPLAY_WIDTH = 460  # 气泡里图的显示宽度上限
+_IMAGE_CACHE: dict[str, QPixmap] = {}
 
 
 def markdown_to_html(text: str) -> str:
@@ -51,15 +60,20 @@ def markdown_to_html(text: str) -> str:
     return html
 
 
-def block_to_markdown(block: dict) -> str:
+def block_to_markdown(block: Mapping[str, Any]) -> str:
     """单个内容块 → Markdown 文本（解析失败时退化为围栏代码块，避免丢内容）。"""
+    payload = dict(block)
     try:
-        return ContentBlock.model_validate(block).to_markdown()
+        text = ContentBlock.model_validate(payload).to_markdown()
     except Exception:  # noqa: BLE001
-        return "```json\n" + str(block) + "\n```"
+        return "```json\n" + str(payload) + "\n```"
+    kind = str(payload.get("type") or "")
+    if kind == "diagram" and str(payload.get("kind") or "svg") != "svg" and text.strip():
+        return "（这张图当前以源码展示，暂不支持离线绘制）\n\n" + text
+    return text
 
 
-def blocks_to_markdown(blocks: list[dict]) -> str:
+def blocks_to_markdown(blocks: Sequence[Mapping[str, Any]]) -> str:
     return "\n\n".join(
         part.strip() for part in (block_to_markdown(block) for block in blocks) if part.strip()
     )
@@ -70,6 +84,44 @@ def html_to_plain(html: str) -> str:
     document = QTextDocument()
     document.setHtml(html)
     return document.toPlainText()
+
+
+def block_pixmap(block: Mapping[str, Any]) -> QPixmap | None:
+    """把 ``svg`` / ``diagram(kind=svg)`` / ``image`` 块变成可显示的位图。
+
+    纯本地：内联 SVG 用 QtSvg 离屏栅格化并缓存（同一张图流式刷新时不再重复渲染），
+    本地图片直接读文件；失败返回 ``None``，由调用方退回源码展示。
+    """
+    kind = str(block.get("type") or "")
+    svg_text = ""
+    if kind == "svg":
+        svg_text = str(block.get("svg") or block.get("content") or "")
+    elif kind == "diagram" and str(block.get("kind") or "svg") == "svg":
+        svg_text = str(block.get("content") or block.get("svg") or "")
+    if svg_text.strip():
+        key = hashlib.sha1(svg_text.encode("utf-8")).hexdigest()
+        cached = _IMAGE_CACHE.get(key)
+        if cached is not None:
+            return cached
+        # 模型给的 SVG 属于不可信内容：渲染前必须过一遍清洗（§13.3 / §13.4）
+        if not is_acceptable(clean(svg_text)):
+            return None
+        try:
+            data = render_svg_png(svg_text, width=DIAGRAM_SOURCE_WIDTH, scale=1.0)
+        except Exception:  # noqa: BLE001 - 渲染失败就退回源码
+            return None
+        pixmap = QPixmap()
+        if not pixmap.loadFromData(data, "PNG") or pixmap.isNull():
+            return None
+        _IMAGE_CACHE[key] = pixmap
+        return pixmap
+    if kind == "image":
+        path = str(block.get("asset") or block.get("path") or block.get("src") or "")
+        if path and Path(path).exists():
+            pixmap = QPixmap(path)
+            if not pixmap.isNull():
+                return pixmap
+    return None
 
 
 class _InputBox(QPlainTextEdit):
@@ -96,23 +148,69 @@ class _Bubble(QFrame):
         self.setObjectName("ChatBubble")
         self.setProperty("role", role)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 9, 12, 9)
-        layout.setSpacing(0)
-        self.text = QLabel()
-        self.text.setObjectName("ChatBubbleText")
-        self.text.setTextFormat(Qt.TextFormat.RichText)
-        self.text.setWordWrap(True)
-        self.text.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        layout.addWidget(self.text)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(12, 9, 12, 9)
+        self._layout.setSpacing(8)
         self.markdown = ""
+        self.html_parts: list[str] = []
+        self._plain_parts: list[str] = []
+
+    # --- 内容 -----------------------------------------------------------
+    def clear_content(self) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.html_parts = []
+        self._plain_parts = []
+
+    def _add_html(self, html: str) -> None:
+        if not html.strip():
+            return
+        label = QLabel()
+        label.setObjectName("ChatBubbleText")
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setWordWrap(True)
+        label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        label.setText(html)
+        self._layout.addWidget(label)
+        self.html_parts.append(html)
+        self._plain_parts.append(html_to_plain(html))
+
+    def _add_image(self, pixmap: QPixmap, caption: str) -> None:
+        label = QLabel()
+        label.setObjectName("ChatBubbleImage")
+        width = min(pixmap.width(), DIAGRAM_DISPLAY_WIDTH)
+        label.setPixmap(pixmap.scaledToWidth(width, Qt.TransformationMode.SmoothTransformation))
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        if caption:
+            label.setToolTip(caption)
+        self._layout.addWidget(label)
+        self.html_parts.append(f'<p>{escape(caption or "图示")}</p>')
+        self._plain_parts.append(f"（图示：{caption}）" if caption else "（图示）")
 
     def set_markdown(self, markdown: str) -> None:
-        self.markdown = markdown
-        self.text.setText(markdown_to_html(markdown))
+        """纯 Markdown（用户提问、历史记录里的 md）：整块渲染。"""
+        self.markdown = str(markdown or "")
+        self.clear_content()
+        self._add_html(markdown_to_html(self.markdown))
+
+    def set_blocks(self, blocks: Sequence[Mapping[str, Any]]) -> None:
+        """按内容块渲染：SVG / 图片块画成图，其余走 Markdown。"""
+        self.markdown = blocks_to_markdown(blocks)
+        self.clear_content()
+        for block in blocks:
+            pixmap = block_pixmap(block)
+            if pixmap is not None:
+                caption = str(block.get("title") or block.get("caption") or "图示")
+                self._add_image(pixmap, caption)
+                continue
+            self._add_html(markdown_to_html(block_to_markdown(block)))
 
     def to_plain_text(self) -> str:
-        return html_to_plain(self.text.text())
+        return "\n".join(part for part in self._plain_parts if part)
 
 
 class ChatHistoryView(QScrollArea):
@@ -142,9 +240,18 @@ class ChatHistoryView(QScrollArea):
         self.setWidget(self._host)
 
     # --- 增删 -----------------------------------------------------------
-    def add_bubble(self, role: str, markdown: str) -> _Bubble:
+    def add_bubble(
+        self,
+        role: str,
+        markdown: str = "",
+        *,
+        blocks: Sequence[Mapping[str, Any]] | None = None,
+    ) -> _Bubble:
         bubble = _Bubble(role)
-        bubble.set_markdown(markdown)
+        if blocks is not None:
+            bubble.set_blocks(blocks)
+        else:
+            bubble.set_markdown(markdown)
         row = QWidget()
         box = QHBoxLayout(row)
         box.setContentsMargins(0, 0, 0, 0)
@@ -299,10 +406,8 @@ class ChatDrawer(QWidget):
         self._refresh_current_bubble()
         if self._parser.protocol_broken:
             fallback = self._parser.fallback_markdown()
-            if self._current_bubble is not None:
-                existing = blocks_to_markdown(self._parser.blocks)
-                merged = (existing + "\n\n" + fallback).strip() if existing.strip() else fallback
-                self._current_bubble.set_markdown(merged)
+            if self._current_bubble is not None and fallback.strip():
+                self._current_bubble.set_markdown(fallback)
         if self._current_bubble is not None and not self._current_bubble.markdown.strip():
             self._current_bubble.set_markdown("（没有拿到内容，请重试一次。）")
         self._current_bubble = None
@@ -311,13 +416,15 @@ class ChatDrawer(QWidget):
     def _refresh_current_bubble(self) -> None:
         if self._current_bubble is None:
             return
-        markdown = blocks_to_markdown(self._parser.blocks)
+        blocks = list(self._parser.blocks)
+        if blocks:
+            self._current_bubble.set_blocks(blocks)
+            self.history._apply_bubble_width()
+            self.history.scroll_to_bottom()
+            return
         partial = self._parser.partial_text()
         if partial:
-            markdown = (markdown + "\n\n" + partial).strip()
-        if markdown.strip():
-            self._current_bubble.set_markdown(markdown)
-            self.history._apply_bubble_width()
+            self._current_bubble.set_markdown(partial)
             self.history.scroll_to_bottom()
 
     def append_stream(self, piece: str) -> None:  # 兼容旧调用
@@ -340,10 +447,10 @@ class ChatDrawer(QWidget):
                 parser = BlockStreamParser()
                 parser.feed(raw)
                 parser.finish()
-                markdown = blocks_to_markdown(parser.blocks) or raw
-            else:
-                markdown = raw
-            self.history.add_bubble("assistant", markdown)
+                if parser.blocks:
+                    self.history.add_bubble("assistant", blocks=parser.blocks)
+                    continue
+            self.history.add_bubble("assistant", raw)
         self.history.scroll_to_bottom()
 
     def conversation_markdown(self) -> str:

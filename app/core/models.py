@@ -352,6 +352,26 @@ class ContentBlock(BaseModel):
             return f"### 小测验\n\n{data.get('question', '')}"
         if kind == "ref":
             return f"> 依据：{data.get('quote', '')}"
+        if kind == "diagram":
+            diagram_kind = str(data.get("kind") or "svg")
+            content = str(data.get("content") or data.get("svg") or "")
+            if diagram_kind == "svg":
+                # SVG 由渲染层栅格化后内嵌展示；Markdown 里保留源码，避免内容丢失。
+                return f"**图示（SVG）**\n\n```svg\n{content}\n```" if content else ""
+            label = "Mermaid 源码" if diagram_kind == "mermaid" else "结构图源码"
+            return f"**{label}**\n\n```{diagram_kind}\n{content}\n```" if content else ""
+        if kind == "svg":
+            content = str(data.get("svg") or data.get("content") or "")
+            if content:
+                return f"**图示（SVG）**\n\n```svg\n{content}\n```"
+            asset = str(data.get("asset") or data.get("path") or "")
+            return f"![图示]({asset})" if asset else ""
+        if kind == "image":
+            asset = str(data.get("asset") or data.get("path") or data.get("src") or "")
+            caption = str(data.get("caption") or data.get("title") or "图示")
+            return f"![{caption}]({asset})" if asset else ""
+        if kind == "animation":
+            return f"> （动画块：{data.get('title', '')}，请在学习台阅读区查看）"
         return ""
 
 

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -71,7 +72,18 @@ class SettingsPage(QWidget):
         self._probe_signals = _ProbeSignals()
         self._probe_signals.finished.connect(self._on_probe_finished)
 
-        layout = QVBoxLayout(self)
+        # 关键：设置项很多，必须放进滚动区，否则布局会把每个分组框压扁成「只有标题的细条」
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        self.scroll_area.setWidget(content)
+        outer.addWidget(self.scroll_area)
         layout.addWidget(self._build_provider_group())
         layout.addWidget(self._build_appearance_group())
         layout.addWidget(self._build_search_group())

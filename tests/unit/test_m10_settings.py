@@ -180,3 +180,25 @@ def test_course_card_labels_are_transparent(qtbot, tmp_path) -> None:
     qtbot.addWidget(card)
 
     assert "#CourseCard QLabel { background-color: transparent; }" in card.styleSheet()
+
+# --- 视觉回归：设置页布局 -------------------------------------------------
+def test_settings_page_scrolls_instead_of_squashing(qtbot, tmp_path) -> None:
+    """设置项多时必须滚动，而不是把分组框压扁成细条（曾经整页全是横线）。"""
+    from PySide6.QtWidgets import QGroupBox, QScrollArea
+
+    from app.ui.pages.settings_page import SettingsPage
+
+    service = _service(tmp_path)
+    page = SettingsPage(service, courses_dir=tmp_path / "Courses")
+    page.resize(1000, 700)
+    qtbot.addWidget(page)
+    page.show()
+    qtbot.waitExposed(page)
+
+    assert page.findChild(QScrollArea) is not None
+    groups = page.findChildren(QGroupBox)
+    assert len(groups) >= 8  # 供应商 / 外观 / 联网 / 偏好面板 7 组 / 结果
+    heights = [group.height() for group in groups]
+    # 修复前：整页每个分组只剩 ~13px 的标题细条；修复后：分组保持自身高度
+    assert min(heights) > 40, f"有分组被压扁成细条：{heights}"
+    assert sum(1 for height in heights if height > 100) >= 6, f"多数分组仍未恢复高度：{heights}"

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from ...agents.illustrator import AnimatorAgent, IllustratorAgent
 from ...agents.notes import NoteKeeperAgent
+from ...agents.qa import QaAgent
 from ...agents.teacher import TeacherAgent
 from ...agents.tools import build_registry
 from ...core.cancel import CancellationToken
@@ -445,6 +446,13 @@ class StudyPage(QWidget):
             return None
         return TeacherAgent(client)
 
+    def _build_qa(self):
+        """答疑 Agent（与教师共用客户端，但用「只回答问题」的骨架）。"""
+        client = getattr(self._services, "client", None)
+        if client is None:
+            return None
+        return QaAgent(client)
+
     def generate_script(self, revision_reason: str = "") -> None:
         teacher = self._build_teacher()
         if teacher is None or self._lesson_dir is None:
@@ -503,10 +511,12 @@ class StudyPage(QWidget):
             return lesson_service.ask_question(
                 lesson_dir,
                 teacher=teacher,
+                qa=self._build_qa(),  # 答疑走专用骨架：只回答，不复述讲义
                 question=question,
                 context=context,
                 selection=selection,
                 persona_body=persona.effective_body if persona else None,
+                persona_name=persona.name if persona else None,
                 depth=depth,
                 cancel=token,
                 executor=executor,

@@ -146,6 +146,10 @@ def test_study_page_ask_question_writes_chat_jsonl(qtbot, tmp_path: Path) -> Non
         page.chat_drawer.send_button.click()
 
         qtbot.waitUntil(lambda: "因为两边变换要能接上" in page.chat_drawer.history.toPlainText(), timeout=20000)
+        # 界面先渲染、chat.jsonl 后落盘：等记录写完再断言（否则是测试自身竞态）
+        qtbot.waitUntil(
+            lambda: len(lesson_service.load_chat(_seed_lesson(tmp_path))) >= 2, timeout=20000
+        )
 
         records = lesson_service.load_chat(_seed_lesson(tmp_path))
         assert [item["role"] for item in records] == ["user", "assistant"]

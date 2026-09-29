@@ -424,6 +424,32 @@ def load_chat(lesson_dir: str | Path) -> list[dict]:
     return [json.loads(line) for line in read_text(path).splitlines() if line.strip()]
 
 
+def build_ask_refs(context: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """把本小节的知识点与资料片段整理成「引用卡片」，作为答疑的依据。"""
+    refs: list[dict[str, Any]] = []
+    for point in context.get("knowledge_points") or []:
+        refs.append(
+            {
+                "type": "outline",
+                "title": f"{point.get('id', '')} {point.get('title', '')}".strip(),
+                "excerpt": str(point.get("summary") or ""),
+            }
+        )
+    for snippet in context.get("material_snippets") or []:
+        refs.append({"type": "material_page", "title": "资料片段", "excerpt": str(snippet)[:400]})
+    return refs
+
+
+def ask_outline_summary(context: Mapping[str, Any]) -> str:
+    lesson = context.get("lesson") or {}
+    chapter = context.get("chapter") or {}
+    course = context.get("course") or {}
+    return (
+        f"{course.get('name', '')} / {chapter.get('id', '')} {chapter.get('title', '')}"
+        f" / {lesson.get('id', '')} {lesson.get('title', '')}"
+    )
+
+
 async def ask_question(
     lesson_dir: str | Path,
     *,
@@ -438,28 +464,59 @@ async def ask_question(
     tools: Sequence[Mapping[str, Any]] | None = None,
     lesson_id: str | None = None,
     course_id: str | None = None,
+    qa: Any = None,
+    persona_name: str | None = None,
 ) -> AsyncIterator[str]:
-    """小节内追问：携带小节上下文与选中片段，回答流式产出并追加写 ``chat.jsonl``。"""
+    """小节内追问：携带小节上下文与选中片段，回答流式产出并追加写 ``chat.jsonl``。
+
+    **必须走答疑 Agent（``qa``）**：教师 Agent 的提示词是「讲完本小节」，
+    以前追问复用它、还把问题塞进一个它根本不读的字段，结果模型只会把讲义
+    再讲一遍（真实 bug）。没有 qa 时退回教师的补丁版提示词（会读 ``ask``）。
+    """
     directory = Path(lesson_dir)
     append_chat_turn(
         directory,
         {"role": "user", "text": question, "selection": selection or None},
     )
+    # 历史答疑（含模型回答）供承接语气；最后一条就是刚写入的这次提问，要排除
+    previous = load_chat(directory)
+    history = [record for record in previous[:-1] if record.get("text") or record.get("md")]
     collected: list[str] = []
-    prompt = f"学生的追问：{question}\n"
-    if selection:
-        prompt += f"他选中的讲义片段：{selection}\n"
-    prompt += "请用 NDJSON 回答（可以先 text 块，最后 done 块），不要重复整节课。"
-    async for piece in teacher.teach(
-        {**dict(context), "ask": prompt},
-        cancel=cancel,
-        executor=executor,
-        tools=tools,
-        persona_body=persona_body,
-        depth=depth,
-        lesson_id=lesson_id,
-        course_id=course_id,
-    ):
+    if qa is not None:
+        stream_iter = qa.answer(
+            question=question,
+            selection=selection,
+            refs=build_ask_refs(context),
+            outline_summary=ask_outline_summary(context),
+            history=history,
+            persona_name=persona_name,
+            persona_body=persona_body,
+            depth=depth,
+            cancel=cancel,
+            executor=executor,
+            tools=tools,
+            lesson_id=lesson_id,
+            course_id=course_id,
+        )
+    else:
+        prompt = f"学生的追问：{question}\n"
+        if selection:
+            prompt += f"他选中的讲义片段：{selection}\n"
+        prompt += (
+            "只回答这个问题，不要复述讲义、不要重讲本节；"
+            "请用 NDJSON 回答（先 text 块给结论，最后 done 块）。"
+        )
+        stream_iter = teacher.teach(
+            {**dict(context), "ask": prompt},
+            cancel=cancel,
+            executor=executor,
+            tools=tools,
+            persona_body=persona_body,
+            depth=depth,
+            lesson_id=lesson_id,
+            course_id=course_id,
+        )
+    async for piece in stream_iter:
         collected.append(piece)
         yield piece
     text = "".join(collected)

@@ -9,11 +9,20 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
-from ..core.models import CourseOutline
+from ..core.models import GOAL_LABELS, CourseOutline
 from ..llm.schema import complete_json, json_schema_of
 from .base import AgentBase, PromptAssembler
 
 MIN_CHAPTERS = 3
+
+## 课程目标取向：同一批知识点，四种拆法与讲法完全不同
+GOAL_HINTS: dict[str, str] = {
+    "general": "通用：结构与篇幅平衡，兼顾直觉与公式。",
+    "exam": "应试：以考点与题型组织小节；每章末给自测与易错点；给可复用的解题步骤；先讲判别条件与常见陷阱。",
+    "crash": "速成：只保留最短可用路径（3-5 小时可学完）；砍掉历史沿革与繁杂推导；每节给最小可懂例子；标注可后续深入的扩展点。",
+    "interest": "兴趣：故事与生活例子优先；少公式多直觉；允许留白与悬念。",
+    "deep_dive": "精讲：推导完整、边界条件与反例齐全；与相邻知识建立联系；每节给延伸阅读与思考题。",
+}
 MIN_LESSONS_PER_CHAPTER = 2
 
 
@@ -66,12 +75,14 @@ class DirectorAgent(AgentBase):
         user_outline: str = "",
         material_summary: str = "",
         clarify_answers: str = "",
+        goal_type: str = "general",
     ) -> str:
         return (
             f"课程名：{course_name}\n"
             f"用户提供的大纲（可能为空）：{user_outline or '（无）'}\n"
             f"资料摘要（可能为空）：{material_summary or '（无）'}\n"
             f"澄清回答（可能为空）：{clarify_answers or '（用户选择跳过）'}\n\n"
+            f"课程目标：{GOAL_LABELS.get(goal_type, '通用')}｜{GOAL_HINTS.get(goal_type, GOAL_HINTS['general'])}\n\n"
             "请按输出协议给出完整教学大纲 JSON。"
         )
 
@@ -95,6 +106,7 @@ class DirectorAgent(AgentBase):
         user_outline: str = "",
         material_summary: str = "",
         clarify_answers: str = "",
+        goal_type: str = "general",
         cancel: Any = None,
     ) -> CourseOutline:
         messages: list[Mapping[str, Any]] = [

@@ -17,6 +17,7 @@ from ..agents.director import MIN_CHAPTERS, MIN_LESSONS_PER_CHAPTER, DirectorAge
 from ..core.models import (
     CourseMeta,
     CourseOutline,
+    CourseProfile,
     CourseStats,
     LessonMeta,
     LessonProgressEntry,
@@ -52,6 +53,7 @@ class OutlineDraft:
     persona: str | None = None
     icon: object | None = None
     icon_svg: str | None = None
+    goal_type: str = "general"
     tags: list[str] = field(default_factory=list)
     llm_profile: str | None = None
 
@@ -102,6 +104,7 @@ class OutlineService:
         persona: str | None = None,
         icon: object | None = None,
         icon_svg: str | None = None,
+        goal_type: str = "general",
         tags: Sequence[str] = (),
         llm_profile: str | None = None,
     ) -> OutlineDraft:
@@ -116,6 +119,7 @@ class OutlineService:
             persona=persona,
             icon=icon,
             icon_svg=icon_svg,
+            goal_type=goal_type,
             tags=[str(tag) for tag in tags],
             llm_profile=llm_profile,
         )
@@ -139,6 +143,7 @@ class OutlineService:
             user_outline=draft.user_outline,
             material_summary=draft.material_summary,
             clarify_answers=draft.clarify_answers,
+            goal_type=getattr(draft, "goal_type", "general"),
             cancel=cancel,
         )
         outline.course_id = draft.course_id
@@ -211,6 +216,7 @@ class OutlineService:
             persona=draft.persona,
             tags=list(draft.tags),
             llm_profile=draft.llm_profile,
+            profile=CourseProfile(goal_type=getattr(draft, "goal_type", "general")),
             stats=CourseStats(
                 chapters=len(target_outline.chapters),
                 lessons=target_outline.total_lessons(),

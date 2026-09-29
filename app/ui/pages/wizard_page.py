@@ -12,6 +12,8 @@ from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal, S
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QToolButton,
+    QButtonGroup,
     QListWidget,
     QListWidgetItem,
     QHBoxLayout,
@@ -27,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.cancel import CancellationToken
-from ...core.models import CourseIcon, CourseOutline
+from ...core.models import GOAL_LABELS, CourseIcon, CourseOutline
 from ...services.outline_service import CreateResult, OutlineDraft, OutlineService
 from ..widgets.icon_grid import IconGrid
 from ..widgets.outline_tree import OutlineTreeWidget
@@ -174,6 +176,30 @@ class WizardPage(QWidget):
         self.material_label.setProperty("role", "muted")
         self.material_label.setWordWrap(True)
         layout.addWidget(self.material_label)
+
+        # 课程目标：同一批知识点，应试 / 速成 / 兴趣 / 精讲的拆法与讲法完全不同
+        goal_label = QLabel("课程目标（决定大纲结构与讲解侧重）")
+        layout.addWidget(goal_label)
+        goal_row = QHBoxLayout()
+        goal_row.setSpacing(6)
+        self.goal_group = QButtonGroup(self)
+        self.goal_group.setExclusive(True)
+        self.goal_buttons: dict[str, QToolButton] = {}
+        for value, label in GOAL_LABELS.items():
+            button = QToolButton()
+            button.setText(label)
+            button.setCheckable(True)
+            button.setToolTip(f"{label}（{value}）")
+            button.setMinimumHeight(30)
+            button.setMinimumWidth(64)
+            if value == "general":
+                button.setChecked(True)
+            self.goal_group.addButton(button)
+            goal_row.addWidget(button)
+            self.goal_buttons[value] = button
+        goal_row.addStretch(1)
+        layout.addLayout(goal_row)
+        self._goal_type = "general"
 
         layout.addWidget(QLabel("课程图标（选预设 / 换颜色 / 或让 AI 生成）"))
         self.icon_grid = IconGrid(columns=6)
@@ -336,6 +362,12 @@ class WizardPage(QWidget):
             f"已解析 {parsed} 份资料" + (f"，{failed} 份失败" if failed else "") + "；生成大纲时会被引用。"
         )
 
+    def _current_goal(self) -> str:
+        """当前选中的课程目标（默认 general）。"""
+        for value, button in getattr(self, "goal_buttons", {}).items():
+            if button.isChecked():
+                return value
+        return "general"
     # --- 图标 -----------------------------------------------------------
     def _current_icon(self) -> CourseIcon:
         preset_id = self.icon_grid.selected_id() or "general"
@@ -438,6 +470,7 @@ class WizardPage(QWidget):
             material_summary=getattr(self, "_material_summary", ""),
             icon=self._current_icon(),
             icon_svg=self._icon_svg,
+            goal_type=self._current_goal(),
             tags=tags,
         )
         if self._draft.name != name:

@@ -27,6 +27,16 @@ REF_TYPES: tuple[str, ...] = (
 MASTERY_VALUES: tuple[int, ...] = (1, 2, 3)
 TRI_STATE: tuple[str, ...] = ("inherit", "on", "off")
 
+# 课程目标取向（M13 新增：影响大纲结构与讲解侧重）
+GOAL_TYPES: tuple[str, ...] = ("general", "exam", "crash", "interest", "deep_dive")
+GOAL_LABELS: dict[str, str] = {
+    "general": "通用",
+    "exam": "应试",
+    "crash": "速成",
+    "interest": "兴趣",
+    "deep_dive": "精讲",
+}
+
 Depth = Literal["minimal", "standard", "deep"]
 Difficulty = Literal["beginner", "intermediate", "advanced"]
 TriState = Literal["inherit", "on", "off"]
@@ -143,6 +153,7 @@ class LearningToggles(Base):
 class CourseProfile(Base):
     target_audience: str = ""
     goal: str = ""
+    goal_type: str = "general"  # 通用 / 应试 / 速成 / 兴趣 / 精讲
     depth: Depth = "standard"
     weekly_minutes: int = 120
 

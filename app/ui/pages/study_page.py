@@ -216,6 +216,14 @@ class StudyPage(QWidget):
         self.reteach_button.setProperty("role", "ghost")
         self.reteach_button.clicked.connect(lambda: self.generate_script(revision_reason="换种讲法"))
         bar.addWidget(self.reteach_button)
+        self.outline_button = QPushButton("课程大纲")
+        self.outline_button.setProperty("role", "ghost")
+        self.outline_button.clicked.connect(lambda: self._open_document("outline"))
+        bar.addWidget(self.outline_button)
+        self.materials_button = QPushButton("课程资料")
+        self.materials_button.setProperty("role", "ghost")
+        self.materials_button.clicked.connect(lambda: self._open_document("materials"))
+        bar.addWidget(self.materials_button)
         self.latest_button = QPushButton("查最新")
         self.latest_button.clicked.connect(self.refresh_latest)
         bar.addWidget(self.latest_button)
@@ -522,6 +530,27 @@ class StudyPage(QWidget):
         return ToolExecutor(registry, budget=CallBudget()), tools
 
     # --- 时效性校验（FR-19 辅助路径：系统预取） --------------------------
+    def _open_document(self, kind: str) -> None:
+        """打开课程大纲 / 课程资料文档（M17）。"""
+        if self._course_dir is None:
+            self.status_message.emit("请先在课程库里打开一门课程")
+            return
+        if kind == "outline":
+            candidates = [self._course_dir / "outline.md", self._course_dir / "outline.json"]
+            label = "课程大纲"
+        else:
+            candidates = [
+                self._course_dir / "materials" / "课程资料.md",
+                self._course_dir / "outline.md",
+            ]
+            label = "课程资料"
+        path = next((item for item in candidates if item.exists()), None)
+        if path is None:
+            self.status_message.emit(f"还没有{label}文档：创建课程时会自动生成")
+            return
+        from ..widgets.document_viewer import DocumentViewerDialog
+
+        DocumentViewerDialog(path=path, title=label, parent=self).exec()
     def refresh_latest(self) -> None:
         """点「查最新」：检索时效性信息，命中则渲染 ref(web) 卡片（§4.19）。"""
         service = getattr(self._services, "search", None)

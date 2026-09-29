@@ -442,5 +442,21 @@ def sync_seed_structure(
         course["stats"]["chapters"] = len(user_outline.get("chapters", []) or [])
         course["stats"]["lessons"] = total
         file_repository.write_json(course_path, course)
+    # 课程资料文档：老课程也要有一份（本地拼装，不需要模型）
+    materials_path = target / "materials" / "课程资料.md"
+    if not materials_path.exists():
+        from .core.models import CourseOutline, GOAL_LABELS
+        from .services.outline_service import build_materials_from_outline
+
+        try:
+            course_outline = CourseOutline.model_validate(user_outline)
+            goal_label = GOAL_LABELS.get(str(course.get("profile", {}).get("goal_type") or "general"), "")
+            file_repository.write_text(
+                materials_path, build_materials_from_outline(course_name, course_outline, goal_label)
+            )
+            notes.append("已生成课程资料文档")
+        except Exception:  # noqa: BLE001
+            pass
+
     notes.append(f"课程结构：{len(user_outline.get('chapters', []) or [])} 章 / {total} 节")
     return notes

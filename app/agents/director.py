@@ -40,6 +40,27 @@ def goal_prompt_line(goal_type: str = "general", goal_types: Sequence[str] | Non
     hints = " ".join(GOAL_HINTS.get(item, "") for item in chosen if item in GOAL_HINTS)
     return f"课程目标：{labels}｜{hints}"
 
+
+MATERIALS_PROMPT = (
+    "请基于以下教学大纲，写一份**课程资料文档**（Markdown）。要求："
+    "① 开头给课程定位、适用人群与该目标取向下最该抓住的主线；"
+    "② 按章 → 小节 → 知识点展开，每个知识点给出：一句话定义、关键要点（2-4 条）、一个最小例子或反例、常见误区；"
+    "③ 小节末标注前置小节与该节必须掌握的知识点；"
+    "④ 只输出 Markdown 正文，不要代码围栏、不要解释。"
+)
+
+
+def build_materials_prompt(course_name: str, outline: CourseOutline, goal_type: str = "general", goal_types: Sequence[str] | None = None) -> str:
+    """把大纲回灌给模型，要求产出「课程资料文档」（知识点详解版）。"""
+    import json as _json
+
+    return (
+        f"课程名：{course_name}\n"
+        + goal_prompt_line(goal_type, goal_types)
+        + "\n\n" + MATERIALS_PROMPT + "\n\n【教学大纲 JSON】\n"
+        + _json.dumps(outline.model_dump(), ensure_ascii=False)[:14000]
+    )
+
 class DirectorAgent(AgentBase):
     name = "director"
     skeleton_prompt = "director/skeleton.md"
@@ -152,6 +173,21 @@ class DirectorAgent(AgentBase):
                 outline = refined
         return outline
 
+    async def generate_materials(
+        self,
+        *,
+        course_name: str,
+        outline: CourseOutline,
+        goal_type: str = "general",
+        goal_types: Sequence[str] | None = None,
+        cancel: Any = None,
+    ) -> str:
+        """生成《课程资料》Markdown（知识点详解）；调用方负责失败兜底。"""
+        prompt = build_materials_prompt(course_name, outline, goal_type, goal_types)
+        parts: list[str] = []
+        async for piece in self.stream([{"role": "user", "content": prompt}], task="outline", cancel=cancel):
+            parts.append(piece)
+        return "".join(parts).strip()
     async def _refine(self, outline: CourseOutline, *, cancel: Any = None) -> CourseOutline | None:
         messages: list[Mapping[str, Any]] = [
             {"role": "user", "content": "这是当前大纲草稿，请细化它。"},

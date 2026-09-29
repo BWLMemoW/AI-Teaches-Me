@@ -108,7 +108,7 @@ def test_generate_and_commit_writes_full_course_structure(tmp_path: Path) -> Non
 
         assert len(outline.chapters) == 3
         assert outline.total_lessons() == 6
-        assert len(client.calls) == 1  # 结构达标，不需要细化轮次
+        assert len(client.calls) == 2  # M17：大纲 + 课程资料，各一次
         assert service.validate(outline) == []
 
         result = service.commit(draft, outline)
@@ -140,7 +140,7 @@ def test_thin_outline_triggers_refinement_round(tmp_path: Path) -> None:
         draft = service.new_draft("只需要一章")
         outline = asyncio_run(service.generate(draft))
 
-        assert len(client.calls) == 2
+        assert len(client.calls) == 3  # 大纲 + 细化 + 课程资料
         assert len(outline.chapters) == 3
     finally:
         index.close()

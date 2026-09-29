@@ -16,6 +16,7 @@ from typing import Any
 from ..agents.director import MIN_CHAPTERS, MIN_LESSONS_PER_CHAPTER, DirectorAgent
 from ..core.models import (
     CourseMeta,
+    GOAL_LABELS,
     CourseOutline,
     CourseProfile,
     CourseStats,
@@ -55,6 +56,7 @@ class OutlineDraft:
     icon_svg: str | None = None
     goal_type: str = "general"
     goal_types: list[str] = field(default_factory=list)
+    materials_md: str = ""  # 课程资料文档（大纲对应的详细知识点）
     tags: list[str] = field(default_factory=list)
     llm_profile: str | None = None
 
@@ -79,6 +81,41 @@ class CreateResult:
     outline: CourseOutline
     files: list[Path] = field(default_factory=list)
 
+
+
+DIFFICULTY_LABELS = {"beginner": "入门", "intermediate": "进阶", "advanced": "挑战"}
+
+
+def build_materials_from_outline(course_name: str, outline: CourseOutline, goal_label: str = "") -> str:
+    """不依赖模型的《课程资料》拼装（离线可用；与模型产出同构）。"""
+    lines = [f"# {course_name} · 课程资料", "", "> 由教学大纲生成，供学习时随时查阅（知识点定义 / 要点 / 例子 / 常见误区）。"]
+    if goal_label:
+        lines += ["", f"课程目标：{goal_label}"]
+    if outline.learning_goals:
+        lines += ["", "## 课程学习目标", ""] + [f"- {goal}" for goal in outline.learning_goals]
+    for chapter in outline.chapters:
+        lines += ["", f"## {chapter.id} {chapter.title}", ""]
+        if chapter.summary:
+            lines += [chapter.summary, ""]
+        for lesson in chapter.lessons:
+            lines += [f"### {lesson.id} {lesson.title}", ""]
+            if lesson.objectives:
+                lines += ["**学习目标**", ""] + [f"- {item}" for item in lesson.objectives] + [""]
+            if lesson.prerequisites:
+                lines += [f"*前置小节：{'、'.join(lesson.prerequisites)}*", ""]
+            for point in lesson.knowledge_points:
+                lines += [
+                    f"#### {point.title}",
+                    "",
+                    f"- **定义 / 要点**：{point.summary or '（待补充）'}",
+                    f"- **难度**：{DIFFICULTY_LABELS.get(point.difficulty, point.difficulty)}"
+                    + ("；**必须掌握**" if point.must_master else ""),
+                    "- **最小例子 / 练习**：学习台点「生成讲义」后，这里会由教师 Agent 补上具体例题。",
+                    "- **常见误区**：容易只记结论而忽略适用条件，做题时先写判别条件再套公式。",
+                    "",
+                ]
+    lines += ["", "## 使用建议", "", "- 先看本文件建立全局印象 → 再进学习台逐节学 → 学完用「生成笔记」沉淀。"]
+    return "\n".join(lines).rstrip() + "\n"
 
 class OutlineService:
     def __init__(
@@ -152,6 +189,21 @@ class OutlineService:
         )
         outline.course_id = draft.course_id
         draft.outline = outline
+        # 一并生成《课程资料》（失败则留空，commit 时本地兜底）
+        try:
+            from ..core.models import GOAL_LABELS
+
+            text = await self.director.generate_materials(
+                course_name=draft.name,
+                outline=outline,
+                goal_type=getattr(draft, "goal_type", "general"),
+                goal_types=list(getattr(draft, "goal_types", []) or []),
+                cancel=cancel,
+            )
+            if text.strip():
+                draft.materials_md = text
+        except Exception:  # noqa: BLE001 - 资料生成失败不阻塞建课
+            pass
         return outline
 
     # --- 校验 -----------------------------------------------------------
@@ -238,6 +290,32 @@ class OutlineService:
         written.append(file_repository.write_json(course_dir / "course.json", meta.model_dump(mode="json")))
         written.append(file_repository.write_json(course_dir / "outline.json", target_outline.model_dump(mode="json")))
         written.append(file_repository.write_text(course_dir / "outline.md", outline_to_markdown(target_outline)))
+
+        # 课程资料文档（大纲对应的详细知识点）：模型产出优先，本地拼装兜底
+        goal_label = GOAL_LABELS.get(getattr(draft, "goal_type", "general"), "")
+        materials_md = (getattr(draft, "materials_md", "") or "").strip() or build_materials_from_outline(
+            name, target_outline, goal_label
+        )
+        written.append(file_repository.write_text(course_dir / "materials" / "课程资料.md", materials_md))
+        written.append(
+            file_repository.write_json(
+                course_dir / "materials" / "materials.json",
+                {
+                    "materials": [
+                        {
+                            "id": "m-outline",
+                            "filename": "课程资料.md",
+                            "kind": "md",
+                            "pages": 1,
+                            "status": "parsed",
+                            "source": "outline",
+                            "parsed_at": now_iso(),
+                            "checksum": "",
+                        }
+                    ]
+                },
+            )
+        )
 
         progress = ProgressMeta(course_id=draft.course_id)
         for chapter in target_outline.chapters:

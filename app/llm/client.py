@@ -128,6 +128,7 @@ class LLMClient:
                     yield piece
                 return
             except ProviderError as exc:
+                # 422/400 多为「某个可选字段不被端点接受」：用最小请求体自动重试一次（只试一次）                 if not emitted and exc.status in (400, 422) and attempt == 1:                     try:                         async for piece in self._stream_once(                             resolved=resolved, api_key=api_key, model_name=model_name,                             messages=list(messages), tools=None, json_schema=None, token=token,                             temperature=None, tool_sink=tool_sink, course_id=course_id,                             lesson_id=lesson_id, agent=agent, task=task,                         ):                             emitted = True                             yield piece                     except ProviderError:                         pass                     else:                         return
                 if not exc.retryable or emitted or attempt >= self.max_attempts:
                     raise
                 delay = min(self.backoff_base * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)

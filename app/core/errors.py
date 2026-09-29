@@ -138,6 +138,9 @@ def classify_exception(exc: BaseException) -> ProviderError:
     name = type(exc).__name__
     status = status_of(exc)
     detail = f"{name}: {exc}"
+    body = getattr(getattr(exc, "response", None), "text", "") or ""
+    if body:
+        detail += " | 服务端返回：" + body[:200]
 
     if name in AUTH_NAMES or status in AUTH_STATUSES:
         return AuthError(

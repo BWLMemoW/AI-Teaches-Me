@@ -302,8 +302,9 @@ class StudyPage(QWidget):
         self.chat_drawer = ChatDrawer()
         self.chat_drawer.send_requested.connect(self.ask)
         self.chat_drawer.stop_requested.connect(self._on_stop)
+        self.chat_drawer.zoom_requested.connect(self._open_chat_window)
         splitter.addWidget(self.chat_drawer)
-        splitter.setSizes([240, 700, 320])
+        splitter.setSizes([260, 640, 440])  # 右栏加宽：追问要渲染 Markdown/代码块
         layout.addWidget(splitter, 1)
 
         self._reload_personas()
@@ -589,6 +590,19 @@ class StudyPage(QWidget):
         from ..widgets.document_viewer import DocumentViewerDialog
 
         DocumentViewerDialog(path=path, title=label, parent=self).exec()
+
+    # --- 追问放大（M23） -------------------------------------------------
+    @Slot()
+    def _open_chat_window(self) -> None:
+        """把当前追问记录放大到独立窗口阅读（Markdown 渲染 + 更宽的阅读区）。"""
+        from ..widgets.document_viewer import DocumentViewerDialog
+
+        markdown_text = self.chat_drawer.conversation_markdown().strip()
+        if not markdown_text:
+            self.status_message.emit("还没有追问记录，先问一个问题吧")
+            return
+        DocumentViewerDialog(text=markdown_text, title="追问记录", parent=self).exec()
+
     def refresh_latest(self) -> None:
         """点「查最新」：检索时效性信息，命中则渲染 ref(web) 卡片（§4.19）。"""
         service = getattr(self._services, "search", None)

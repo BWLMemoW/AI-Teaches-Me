@@ -23,27 +23,33 @@ from PySide6.QtWidgets import (
 class DocumentViewerDialog(QDialog):
     """只读展示一个 Markdown / 文本文件。"""
 
-    def __init__(self, *, path: str | Path, title: str | None = None, parent=None) -> None:
+    def __init__(self, *, path: str | Path | None = None, text: str | None = None, title: str | None = None, parent=None) -> None:
         super().__init__(parent)
-        self.path = Path(path)
+        self.path = Path(path) if path is not None else Path("（未落盘文本）")
         self.setWindowTitle(title or self.path.name)
         self.resize(880, 660)
 
         layout = QVBoxLayout(self)
-        header = QLabel(f"{self.path.parent.name} / {self.path.name}")
+        header_text = title if text is not None else f"{self.path.parent.name} / {self.path.name}"
+        header = QLabel(header_text)
         header.setProperty("role", "muted")
         layout.addWidget(header)
 
         self.viewer = QTextBrowser()
         self.viewer.setOpenExternalLinks(False)
-        try:
-            text = self.path.read_text(encoding="utf-8")
-        except OSError as exc:
-            text = f"（读取失败：{exc}）"
-        if self.path.suffix.lower() == ".md":
-            self.viewer.setMarkdown(text)
+        if text is None:
+            try:
+                body = self.path.read_text(encoding="utf-8")
+            except OSError as exc:
+                body = f"（读取失败：{exc}）"
         else:
-            self.viewer.setPlainText(text)
+            body = text
+        if text is not None:
+            self.viewer.setMarkdown(body)
+        elif self.path.suffix.lower() == ".md":
+            self.viewer.setMarkdown(body)
+        else:
+            self.viewer.setPlainText(body)
         layout.addWidget(self.viewer, 1)
 
         row = QHBoxLayout()

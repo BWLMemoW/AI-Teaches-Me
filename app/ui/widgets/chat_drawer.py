@@ -1,17 +1,53 @@
-"""追问抽屉（《项目文档》§4.7 FR-07、§11.4 ``ChatDrawer``；《技术文档》§3.6 ``chat.jsonl``）。"""
+"""追问抽屉（《项目文档》§4.7 FR-07、§11.4 ``ChatDrawer``）。
+
+M23 起回答**渲染 Markdown**（标题/列表/表格/代码块），不再吐原始 NDJSON：
+* 记录区用 ``QTextBrowser``（Qt 富文本，支持表格与等宽代码）；
+* 模型流式吐 NDJSON → 解析成内容块 → 逐块转 Markdown → 追加渲染（块级流式）；
+* 记录区只读且不可获焦；输入框在下方与发送按钮同行；支持「放大」到独立窗口。
+"""
 
 from __future__ import annotations
 
+from html import escape
+
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
+
+from ...core.models import ContentBlock
+from ...llm.stream import BlockStreamParser
+
+FALLBACK_CSS = "pre { background:#F6F8FA; padding:8px; }"
+
+
+def markdown_to_html(text: str) -> str:
+    """Markdown → HTML（Qt 富文本可渲染）；失败时降级为等宽原文。"""
+    source = str(text or "")
+    try:
+        import markdown as markdown_module
+
+        return markdown_module.markdown(source, extensions=["tables", "fenced_code", "sane_lists"])
+    except Exception:  # noqa: BLE001
+        return "<pre>" + escape(source) + "</pre>"
+
+
+def blocks_to_html(blocks: list[dict]) -> str:
+    parts: list[str] = []
+    for block in blocks:
+        try:
+            markdown_text = ContentBlock.model_validate(block).to_markdown()
+        except Exception:  # noqa: BLE001
+            markdown_text = "```json\n" + str(block) + "\n```"
+        if markdown_text.strip():
+            parts.append(markdown_to_html(markdown_text))
+    return "".join(parts)
 
 
 class _InputBox(QPlainTextEdit):
@@ -32,24 +68,27 @@ class _InputBox(QPlainTextEdit):
 class ChatDrawer(QWidget):
     send_requested = Signal(str, str)  # (问题, 选中片段)
     stop_requested = Signal()
+    zoom_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setMinimumWidth(380)  # 太窄渲染不好看（M23）
         layout = QVBoxLayout(self)
         title = QLabel("追问")
         title.setProperty("role", "subtitle")
         layout.addWidget(title)
 
-        history_label = QLabel("对话记录（只读）")
-        history_label.setProperty("role", "muted")
-        layout.addWidget(history_label)
+        self.history_label = QLabel("对话记录（只读；这里只是展示，不能输入）")
+        self.history_label.setProperty("role", "muted")
+        self.history_label.setWordWrap(True)
+        layout.addWidget(self.history_label)
 
-        self.history = QPlainTextEdit()
+        self.history = QTextBrowser()
+        self.history.setOpenExternalLinks(False)
         self.history.setReadOnly(True)
-        # 记录区不可获焦：避免被误当成输入框（曾出现「上面的输不了字」）
         self.history.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.history.setObjectName("ChatHistory")
-        self.history.setPlaceholderText("这里会显示你与老师的问答记录（不可直接编辑）。")
+        self.history.setMinimumHeight(240)
         layout.addWidget(self.history, 1)
 
         self.selection_label = QLabel("未选中片段")
@@ -64,14 +103,11 @@ class ChatDrawer(QWidget):
         self.input_edit = _InputBox()
         self.input_edit.setPlaceholderText("在这里输入追问（Ctrl+Enter 发送）")
         self.input_edit.setFixedHeight(84)
-        # 明确保证「可以输入」：不被禁用、非只读、能拿焦点（曾出现「文字输不进去」）
         self.input_edit.setEnabled(True)
         self.input_edit.setReadOnly(False)
         self.input_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.input_edit.submit.connect(self._on_send)
-        layout.addWidget(self.input_edit)
 
-        # 输入框与发送按钮同一行（像普通聊天应用），输入框占满剩余宽度
         composer = QHBoxLayout()
         composer.addWidget(self.input_edit, 1)
         buttons = QVBoxLayout()
@@ -82,19 +118,94 @@ class ChatDrawer(QWidget):
         self.stop_button = QPushButton("停止")
         self.stop_button.clicked.connect(self.stop_requested.emit)
         buttons.addWidget(self.stop_button)
+        self.zoom_button = QPushButton("放大")
+        self.zoom_button.setProperty("role", "ghost")
+        self.zoom_button.clicked.connect(self.zoom_requested.emit)
+        buttons.addWidget(self.zoom_button)
         composer.addLayout(buttons)
         layout.addLayout(composer)
 
+        # 回答流式解析状态
+        self._parser = BlockStreamParser()
+        self._rendered_blocks = 0
+
+    # --- 加载与写入 -----------------------------------------------------
+    selection = ""
+
     def focus_input(self) -> None:
-        """把焦点给输入框（打开小节 / 点开抽屉时调用）。"""
+        """把焦点给输入框（打开小节时调用）。"""
         self.input_edit.setFocus()
 
     def set_selection(self, text: str) -> None:
         self.selection = text
         self.selection_label.setText(f"选中：{text[:60]}" if text else "未选中片段")
 
-    selection = ""
+    def clear(self) -> None:
+        self.history.clear()
+        self._parser = BlockStreamParser()
+        self._rendered_blocks = 0
 
+    def append_user(self, text: str) -> None:
+        self.history.append(
+            f'<p style="margin:8px 0 2px;"><b>我：</b>{escape(str(text))}</p>'
+        )
+
+    def begin_answer(self) -> None:
+        """开始一段回答：重置解析器并写入「老师：」标签。"""
+        self._parser = BlockStreamParser()
+        self._rendered_blocks = 0
+        self.history.append('<p style="margin:8px 0 2px;"><b>老师：</b></p>')
+
+    def feed_answer_piece(self, piece: str) -> None:
+        """流式喂入 NDJSON 片段：每完成一个内容块就渲染一段 Markdown。"""
+        self._parser.feed(piece)
+        self._flush_new_blocks()
+
+    def end_answer(self) -> None:
+        self._parser.finish()
+        self._flush_new_blocks()
+        if self._parser.protocol_broken:
+            self.history.append(markdown_to_html(self._parser.fallback_markdown()))
+
+    def _flush_new_blocks(self) -> None:
+        blocks = self._parser.blocks[self._rendered_blocks :]
+        if not blocks:
+            return
+        self._rendered_blocks = len(self._parser.blocks)
+        self.history.append(blocks_to_html(blocks))
+        scrollbar = self.history.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def append_stream(self, piece: str) -> None:  # 兼容旧调用
+        self.feed_answer_piece(piece)
+
+    def append_assistant_start(self) -> None:
+        self.begin_answer()
+
+    def append_assistant_end(self) -> None:
+        self.end_answer()
+
+    def load_records(self, records: list[dict]) -> None:
+        self.clear()
+        for record in records:
+            if record.get("role") == "user":
+                self.append_user(record.get("text") or "")
+            else:
+                raw = str(record.get("md") or "")
+                if raw.strip().startswith("{"):
+                    parser = BlockStreamParser()
+                    parser.feed(raw)
+                    parser.finish()
+                    html = blocks_to_html(parser.blocks) or markdown_to_html(raw)
+                else:
+                    html = markdown_to_html(raw)
+                self.history.append('<p style="margin:8px 0 2px;"><b>老师：</b></p>' + html)
+
+    def conversation_markdown(self) -> str:
+        """把当前对话整理成 Markdown（供「放大」窗口展示）。"""
+        return self.history.toPlainText()
+
+    # --- 交互 -----------------------------------------------------------
     def _on_send(self) -> None:
         question = self.input_edit.toPlainText().strip()
         if not question:
@@ -102,26 +213,3 @@ class ChatDrawer(QWidget):
         self.input_edit.clear()
         self.append_user(question)
         self.send_requested.emit(question, self.selection)
-
-    def append_user(self, text: str) -> None:
-        self.history.appendPlainText(f"我：{text}\n")
-
-    def append_assistant_start(self) -> None:
-        self.history.appendPlainText("老师：")
-
-    def append_stream(self, piece: str) -> None:
-        cursor = self.history.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        cursor.insertText(piece)
-        self.history.setTextCursor(cursor)
-        self.history.ensureCursorVisible()
-
-    def append_assistant_end(self) -> None:
-        self.history.appendPlainText("")
-
-    def load_records(self, records: list[dict]) -> None:
-        self.history.clear()
-        for record in records:
-            role = "我" if record.get("role") == "user" else "老师"
-            text = record.get("text") or record.get("md") or ""
-            self.history.appendPlainText(f"{role}：{text}\n")

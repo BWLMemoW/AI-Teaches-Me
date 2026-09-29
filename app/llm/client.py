@@ -453,15 +453,18 @@ class LLMClient:
                         if text:
                             text_chars += len(text)
                             yield text
+                    calls = tool_collector.finish()
                     if tool_sink is not None:
-                        tool_sink.extend(tool_collector.finish())
+                        tool_sink.extend(calls)
                     if finish_reason == "length":
                         raise TruncatedOutput(
                             f"模型输出被 max_tokens={effective_tokens} 截断"
                             + ("（正文一个字都没出来，预算被思考占满）" if not text_chars else "，只收到半截内容"),
                             detail=f"finish_reason=length reasoning_chars={reasoning_chars}",
                         )
-                    if not text_chars and reasoning_chars:
+                    # 注意：只发起工具调用、没有正文的这一轮是**正常**的（Tool Loop 会回喂结果再继续），
+                    # 不能当成「只思考不落笔」而报错。
+                    if not text_chars and not calls and reasoning_chars:
                         raise TruncatedOutput(
                             "模型只输出了思考、没有正文：token 预算被思考占满",
                             detail=f"reasoning_chars={reasoning_chars} max_tokens={effective_tokens}",

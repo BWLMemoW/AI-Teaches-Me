@@ -10,13 +10,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from ..core.errors import ConfigError
+from ..core.errors import ConfigError, ProviderError
 
+LOGGER = logging.getLogger(__name__)
 PROMPTS_ROOT = Path(__file__).resolve().parents[2] / "prompts"
 MAX_TOOL_ROUNDS = 3
 UNTRUSTED_TEMPLATE = '<untrusted source="{source}">{body}</untrusted>'
@@ -196,33 +198,49 @@ class AgentBase:
         task: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        """§4.5 的 Tool Loop：内容块照常外发，工具结果以不可信内容回喂，最多 3 轮。"""
+        """§4.5 的 Tool Loop：内容块照常外发，工具结果以不可信内容回喂，最多 3 轮。
+
+        兜底（真实踩过的坑）：某些兼容端点会在「带 tool 结果的历史」上返回 4xx，
+        此时整段对话已经不可用；只要**还没有正文产出**，就丢掉工具上下文、
+        用干净对话直出内容——总好过整节课讲不出来。
+        """
         conversation = self.with_system(messages, system)
-        for _round in range(self.max_tool_rounds + 1):
-            tool_calls: list[dict[str, Any]] = []
-            async for piece in self.client.stream_chat(
-                conversation,
-                task=task or self.default_task,
-                tools=list(tools) if tools else None,
-                cancel=cancel,
-                tool_sink=tool_calls,
-                **kwargs,
-            ):
+        yielded_text = False
+        rounds_done = 0
+        try:
+            for _round in range(self.max_tool_rounds + 1):
+                tool_calls: list[dict[str, Any]] = []
+                async for piece in self.client.stream_chat(
+                    conversation,
+                    task=task or self.default_task,
+                    tools=list(tools) if tools else None,
+                    cancel=cancel,
+                    tool_sink=tool_calls,
+                    **kwargs,
+                ):
+                    yielded_text = True
+                    yield piece
+
+                if not tool_calls:
+                    return
+                rounds_done += 1
+
+                # 回喂给模型时必须是**标准 OpenAI 结构**：否则 DeepSeek 等端点会直接 422
+                # {"role":"assistant","tool_calls":[{"id":..,"type":"function",
+                #   "function":{"name":..,"arguments":"<JSON 字符串>"}}]}
+                conversation.append({"role": "assistant", "tool_calls": normalize_tool_calls(tool_calls)})
+                for call in tool_calls:
+                    result = await executor.run(call, cancel)
+                    conversation.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(call.get("id") or ""),
+                            "content": wrap_untrusted(result, source=str(call.get("name") or "tool")),
+                        }
+                    )
+        except ProviderError as exc:
+            if not rounds_done or yielded_text or (exc.status or 0) // 100 != 4:
+                raise
+            LOGGER.warning("工具回喂被端点拒绝（status=%s），改为不带工具直出正文", exc.status)
+            async for piece in self.stream(messages, system=system, cancel=cancel, task=task, **kwargs):
                 yield piece
-
-            if not tool_calls:
-                return
-
-            # 回喂给模型时必须是**标准 OpenAI 结构**：否则 DeepSeek 等端点会直接 422
-            # {"role":"assistant","tool_calls":[{"id":..,"type":"function",
-            #   "function":{"name":..,"arguments":"<JSON 字符串>"}}]}
-            conversation.append({"role": "assistant", "tool_calls": normalize_tool_calls(tool_calls)})
-            for call in tool_calls:
-                result = await executor.run(call, cancel)
-                conversation.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": str(call.get("id") or ""),
-                        "content": wrap_untrusted(result, source=str(call.get("name") or "tool")),
-                    }
-                )

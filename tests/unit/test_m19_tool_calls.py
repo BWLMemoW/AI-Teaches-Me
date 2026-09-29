@@ -77,3 +77,79 @@ def test_tool_loop_sends_standard_tool_calls_back() -> None:
     tool_message = next(item for item in second_round if item.get("role") == "tool")
     assert tool_message["tool_call_id"] == "call_1"
     assert "<untrusted" in tool_message["content"]
+
+class _RejectingClient:
+    """第 1 轮返回工具调用，第 2 轮（带 tool 历史）直接 400，之后不带工具则正常出正文。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.tool_free_calls = 0
+
+    async def stream_chat(self, messages, **kwargs):
+        self.calls += 1
+        has_tool_history = any(item.get("role") == "tool" for item in messages)
+        if not has_tool_history and kwargs.get("tools"):
+            sink = kwargs.get("tool_sink")
+            if sink is not None:
+                sink.append({"id": "call_1", "name": "get_progress", "arguments": "{}"})
+            return
+        if has_tool_history:
+            from app.core.errors import FatalError
+
+            raise FatalError("模型服务返回错误（400）", status=400)
+        self.tool_free_calls += 1
+        yield "干净对话直出的正文。"
+
+
+def test_tool_loop_recovers_from_endpoint_rejecting_tool_history() -> None:
+    """回归：端点拒绝「带 tool 结果的历史」时，以前整节课都生成不出来。"""
+    client = _RejectingClient()
+    agent = AgentBase(client)
+
+    async def run() -> list[str]:
+        return [
+            piece
+            async for piece in agent.run_tool_loop(
+                [{"role": "user", "content": "讲一节"}], [], executor=_Executor(), system="sys"
+            )
+        ]
+
+    pieces = asyncio.run(run())
+
+    assert pieces == ["干净对话直出的正文。"]
+    assert client.tool_free_calls == 1
+
+
+def test_tool_loop_does_not_hide_errors_after_text_was_emitted() -> None:
+    """已经吐了正文再报错：不再重来（否则用户会看到重复内容），照旧抛出。"""
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def stream_chat(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                sink = kwargs.get("tool_sink")
+                if sink is not None:
+                    sink.append({"id": "call_1", "name": "get_progress", "arguments": "{}"})
+                yield "半截正文"
+                return
+            from app.core.errors import FatalError
+
+            raise FatalError("模型服务返回错误（400）", status=400)
+
+    agent = AgentBase(_Client())
+
+    async def run() -> list[str]:
+        return [
+            piece
+            async for piece in agent.run_tool_loop(
+                [{"role": "user", "content": "讲一节"}], [], executor=_Executor(), system="sys"
+            )
+        ]
+
+    with pytest.raises(Exception) as info:
+        asyncio.run(run())
+
+    assert "400" in str(info.value)

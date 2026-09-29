@@ -456,3 +456,29 @@ def test_max_tokens_override_is_forwarded() -> None:
     llm, completions, _ = _client(lambda n: _FakeStream([_chunk("x")]))
     asyncio.run(_collect(llm, max_tokens=32768))
     assert completions.calls[0]["max_tokens"] == 32768
+
+def test_tool_only_round_is_not_truncation() -> None:
+    """回归：只发起工具调用、没有正文的一轮是正常的（Tool Loop 会回喂），
+    以前会被误判成「只思考没正文」而直接失败。"""
+
+    def tool_chunk():
+        call = SimpleNamespace(
+            index=0, id="call_1", function=SimpleNamespace(name="get_progress", arguments="{}")
+        )
+        delta = SimpleNamespace(content=None, reasoning_content="先看看进度", tool_calls=[call])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(delta=delta, finish_reason="tool_calls")], usage=None
+        )
+
+    def make(count: int):
+        return _FakeStream([tool_chunk()])
+
+    llm, completions, _ = _client(make)
+    sink: list[dict] = []
+
+    async def run() -> list[str]:
+        return [piece async for piece in llm.stream_chat(MESSAGES, tools=[{"x": 1}], tool_sink=sink)]
+
+    # 该轮没有正文，也不该报错；工具调用交给上层循环继续
+    assert asyncio.run(run()) == []
+    assert len(completions.calls) == 1  # 没有被当成截断而重试

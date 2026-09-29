@@ -21,11 +21,16 @@ PROMPTS_ROOT = Path(__file__).resolve().parents[2] / "prompts"
 MAX_TOOL_ROUNDS = 3
 UNTRUSTED_TEMPLATE = '<untrusted source="{source}">{body}</untrusted>'
 
-# 人设越权模式（§4.4.2 / §13.9：命中即剔除该行，并提示「已忽略 N 条」）
-PERSONA_CONFLICT_PATTERNS: tuple[str, ...] = (
-    "不要输出", "不用输出", "省略", "忽略上面的", "忽略以上", "跳过输出",
-    "减少知识点", "压缩知识点", "不讲知识点", "只讲重点", "讲浅一点",
-    "ignore previous", "ignore above", "skip the protocol",
+# 人设越权模式（§4.4.2 / §13.9）：**必须同时命中「动作 + 目标」才剔除该行**。
+# 早期版本只匹配单个词（如「省略」「输出」），把人设里正常的风格句（例如
+# 「不要省略术语的准确解释」）也误删了，导致「人设看起来没生效」。
+PERSONA_CONFLICT_PATTERNS: tuple[tuple[str, ...], ...] = (
+    ("不要", "协议"), ("不要", "输出格式"), ("不要", "json"), ("不要", "五段"),
+    ("忽略", "协议"), ("忽略", "规则"), ("忽略", "以上"), ("忽略", "上面"),
+    ("省略", "知识点"), ("减少", "知识点"), ("压缩", "知识点"), ("跳过", "知识点"),
+    ("不讲", "知识点"), ("只讲", "重点"), ("讲浅", "知识点"),
+    ("ignore", "protocol"), ("ignore", "previous"), ("ignore", "above"),
+    ("skip", "protocol"),
 )
 
 
@@ -68,7 +73,9 @@ class PromptAssembler:
         dropped: list[str] = []
         for line in (body or "").splitlines():
             lowered = line.lower()
-            if any(pattern.lower() in lowered for pattern in PERSONA_CONFLICT_PATTERNS):
+            if any(
+                all(token in lowered for token in group) for group in PERSONA_CONFLICT_PATTERNS
+            ):
                 dropped.append(line.strip())
                 continue
             kept.append(line)

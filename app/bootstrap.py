@@ -229,6 +229,8 @@ def bootstrap_workspace(
     if install_seed:
         try:
             seeded = install_seed_courses(layout)
+            # 老版本复制过来的示例课程：把新增章节树/进度/统计补上（不动用户内容）
+            messages.extend(sync_seed_structure(layout))
         except Exception as exc:  # noqa: BLE001
             messages.append(f"示例课程装载失败：{exc}")
 
@@ -342,3 +344,103 @@ def restore_seed_course(
             file_repository.delete_to_recycle_bin(target)  # 旧版进回收站，不直接抹掉
         written.extend(install_seed_courses(layout, source=root))
     return written
+def sync_seed_structure(
+    layout: WorkspaceLayout,
+    *,
+    course_name: str = "ATM 使用指南",
+    source: str | Path | None = None,
+) -> list[str]:
+    """把内置种子的**结构**合并进已有示例课程：补章节树、进度与统计。
+
+    只动结构文件（``outline.json`` / ``outline.md`` / ``chapter.json`` / ``progress.json`` /
+    ``course.json`` 的 stats），**绝不覆盖**用户的讲义、笔记、lesson.json 与 widgets。
+    """
+    from .core.config import config_from_dict  # noqa: F401 - 保持导入风格一致
+    from .core.models import CourseOutline, outline_to_markdown
+    from .core.paths import read_json, safe_component, safe_join
+    from .infra import file_repository
+
+    root = Path(source) if source else seed_courses_dir()
+    bundle = root / course_name
+    target = safe_join(layout.courses, safe_component(course_name))
+    if not bundle.is_dir() or not target.is_dir():
+        return []
+
+    notes: list[str] = []
+    bundle_outline = read_json(bundle / "outline.json", default={}) or {}
+    user_outline = read_json(target / "outline.json", default={}) or {}
+    existing_ids = {
+        lesson.get("id")
+        for chapter in user_outline.get("chapters", []) or []
+        for lesson in chapter.get("lessons", []) or []
+    }
+
+    changed = False
+    for chapter in bundle_outline.get("chapters", []) or []:
+        user_chapter = next(
+            (item for item in user_outline.setdefault("chapters", []) if item.get("id") == chapter.get("id")),
+            None,
+        )
+        if user_chapter is None:
+            user_outline["chapters"].append(chapter)
+            changed = True
+            continue
+        for lesson in chapter.get("lessons", []) or []:
+            if lesson.get("id") not in existing_ids:
+                user_chapter.setdefault("lessons", []).append(lesson)
+                changed = True
+
+    if changed:
+        user_outline.setdefault("schema_version", 1)
+        file_repository.write_json(target / "outline.json", user_outline)
+        try:
+            file_repository.write_text(
+                target / "outline.md", outline_to_markdown(CourseOutline.model_validate(user_outline))
+            )
+        except Exception:  # noqa: BLE001 - 大纲可读版失败不影响结构
+            pass
+        notes.append("已补齐章节树")
+
+    # 章元信息（缺哪个补哪个）
+    for chapter in user_outline.get("chapters", []) or []:
+        chapter_dir = target / "chapters" / safe_component(f"{chapter.get('id')}-{chapter.get('title', '')}")
+        chapter_dir.mkdir(parents=True, exist_ok=True)
+        meta = chapter_dir / "chapter.json"
+        if not meta.exists():
+            bundle_meta = bundle / "chapters" / f"{chapter.get('id')}-{chapter.get('title', '')}" / "chapter.json"
+            if bundle_meta.exists():
+                file_repository.write_text(meta, bundle_meta.read_text(encoding="utf-8"))
+            else:
+                file_repository.write_json(
+                    meta,
+                    {
+                        "schema_version": 1,
+                        "id": chapter.get("id"),
+                        "title": chapter.get("title", ""),
+                        "summary": chapter.get("summary", ""),
+                        "lesson_order": [item.get("id") for item in chapter.get("lessons", []) or []],
+                    },
+                )
+            notes.append(f"补齐 {chapter.get('id')} 的章信息")
+
+    # 进度：补上缺失小节
+    progress_path = target / "progress.json"
+    progress = read_json(progress_path, default={}) or {}
+    lessons = progress.setdefault("lessons", {})
+    for chapter in user_outline.get("chapters", []) or []:
+        for lesson in chapter.get("lessons", []) or []:
+            lessons.setdefault(str(lesson.get("id")), {"status": "not_started", "mastery": None, "quiz_score": None, "minutes": 0})
+    progress.setdefault("schema_version", 1)
+    file_repository.write_json(progress_path, progress)
+
+    # 课程统计
+    total = sum(len(chapter.get("lessons", []) or []) for chapter in user_outline.get("chapters", []) or [])
+    course_path = target / "course.json"
+    course = read_json(course_path, default={}) or {}
+    if course:
+        course.setdefault("stats", {})
+        course["stats"]["chapters"] = len(user_outline.get("chapters", []) or [])
+        course["stats"]["lessons"] = total
+        file_repository.write_json(course_path, course)
+    notes.append(f"课程结构：{len(user_outline.get('chapters', []) or [])} 章 / {total} 节")
+    return notes

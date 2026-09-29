@@ -359,3 +359,41 @@ def test_preference_panel_emits_restore_seed(qtbot, tmp_path) -> None:
 
     with qtbot.waitSignal(panel.restore_seed_requested, timeout=2000):
         panel.restore_seed_button.click()
+
+def test_sync_seed_structure_upgrades_old_course_without_touching_content(tmp_path) -> None:
+    """回归：旧版示例课程（只有 1 节）在启动引导时自动补齐章节树，且不覆盖用户内容。"""
+    import json
+
+    from app.bootstrap import bootstrap_workspace, sync_seed_structure
+
+    result = bootstrap_workspace(
+        tmp_path, store=SecretStore(backend=InMemoryBackend()), configure_file_logging=False
+    )
+    course = result.layout.courses / "ATM 使用指南"
+    outline_path = course / "outline.json"
+    outline = json.loads(outline_path.read_text(encoding="utf-8"))
+    # 模拟「旧版」：只留 C1 的第一节，并且把 C2 目录挪走
+    outline["chapters"] = [
+        {
+            "id": "C1",
+            "title": outline["chapters"][0]["title"],
+            "summary": "",
+            "lessons": [outline["chapters"][0]["lessons"][0]],
+        }
+    ]
+    outline_path.write_text(json.dumps(outline, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
+    moved = tmp_path / "C2-moved"
+    (course / "chapters" / "C2-把课程变成你自己的").rename(moved)
+    script = course / "chapters" / "C1-三分钟上手" / "lessons" / "L1-1-先配置你的-AI" / "script.md"
+    script.write_text("用户改过的讲义", encoding="utf-8")
+
+    notes = sync_seed_structure(result.layout)
+
+    upgraded = json.loads(outline_path.read_text(encoding="utf-8"))
+    lesson_ids = [lesson["id"] for chapter in upgraded["chapters"] for lesson in chapter["lessons"]]
+    assert lesson_ids == ["L1-1", "L1-2", "L1-3", "L2-1", "L2-2"]
+    assert script.read_text(encoding="utf-8") == "用户改过的讲义"  # 用户内容一个字节都没动
+    assert (course / "chapters" / "C2-把课程变成你自己的" / "chapter.json").exists()
+    assert any("2 章 / 5 节" in note for note in notes)
+    progress = json.loads((course / "progress.json").read_text(encoding="utf-8"))
+    assert set(progress["lessons"]) >= {"L1-1", "L1-2", "L1-3", "L2-1", "L2-2"}

@@ -110,6 +110,28 @@ def wrap_untrusted(result: Any, *, source: str = "tool") -> str:
     return UNTRUSTED_TEMPLATE.format(source=source, body=body)
 
 
+
+def normalize_tool_calls(calls: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """把内部收集到的工具调用规范成 OpenAI / DeepSeek 要求的消息结构。
+
+    内部形状（``app/llm/client.py`` 的 ``_ToolCallCollector``）：``{"id","name","arguments"}``；
+    协议要求：``{"id","type":"function","function":{"name","arguments"}}``，其中 arguments 必须是
+    **JSON 字符串**。缺了 type/function 包装会被端点判为非法请求（实测 DeepSeek 返回 422）。
+    """
+    normalized: list[dict[str, Any]] = []
+    for call in calls:
+        arguments = call.get("arguments")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments if arguments is not None else {}, ensure_ascii=False)
+        normalized.append(
+            {
+                "id": str(call.get("id") or f"call_{len(normalized)}"),
+                "type": "function",
+                "function": {"name": str(call.get("name") or ""), "arguments": arguments or "{}"},
+            }
+        )
+    return normalized
+
 class AgentBase:
     """所有 Agent 的基类。"""
 
@@ -191,7 +213,10 @@ class AgentBase:
             if not tool_calls:
                 return
 
-            conversation.append({"role": "assistant", "tool_calls": tool_calls})
+            # 回喂给模型时必须是**标准 OpenAI 结构**：否则 DeepSeek 等端点会直接 422
+            # {"role":"assistant","tool_calls":[{"id":..,"type":"function",
+            #   "function":{"name":..,"arguments":"<JSON 字符串>"}}]}
+            conversation.append({"role": "assistant", "tool_calls": normalize_tool_calls(tool_calls)})
             for call in tool_calls:
                 result = await executor.run(call, cancel)
                 conversation.append(

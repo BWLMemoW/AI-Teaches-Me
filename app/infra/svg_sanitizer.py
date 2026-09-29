@@ -42,11 +42,13 @@ def clean(svg_text: str, *, max_bytes: int = MAX_BYTES, max_elements: int = MAX_
         problems.append(f"SVG 体积超过 {max_bytes // 1024}KB")
 
     fenced = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", raw).strip()
-    start = fenced.find("<svg")
-    if start < 0:
+    # 命名空间容错：ElementTree 序列化后会变成 <ns0:svg ...>，二次清洗必须也能识别（幂等性）
+    root_match = re.search(r"<(?:[A-Za-z0-9_]+:)?svg\b", fenced, re.IGNORECASE)
+    if root_match is None:
         return SanitizeResult(problems=["找不到 <svg> 根元素"])
-    end = fenced.rfind("</svg>")
-    snippet = fenced[start : end + 6] if end > start else fenced[start:]
+    start = root_match.start()
+    end_match = re.search(r"</(?:[A-Za-z0-9_]+:)?svg\s*>", fenced, re.IGNORECASE)
+    snippet = fenced[start : end_match.end()] if end_match and end_match.end() > start else fenced[start:]
 
     try:
         root = ElementTree.fromstring(snippet)

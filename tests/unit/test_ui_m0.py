@@ -173,7 +173,8 @@ def test_library_page_lists_seed_course(qtbot, tmp_path: Path) -> None:
 
     assert [item.name for item in courses] == ["ATM 使用指南"]
     assert page.course_list.count() == 1
-    assert "[示例]" in page.course_list.item(0).text()
+    assert "示例" in page.course_list.item(0).text()  # 卡片网格文案（M8 起默认网格视图）
+    assert page.course_list.item(0).icon().isNull() is False  # 卡片带 SVG 图标
     assert page.empty_label.isHidden() is True
 
 

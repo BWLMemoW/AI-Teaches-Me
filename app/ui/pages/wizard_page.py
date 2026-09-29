@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import asyncio
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal, Slot
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QListWidget,
+    QListWidgetItem,
     QHBoxLayout,
+    QListView,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
@@ -24,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.cancel import CancellationToken
-from ...core.models import CourseOutline
+from ...core.models import CourseIcon, CourseOutline
 from ...services.outline_service import CreateResult, OutlineDraft, OutlineService
 from ..widgets.outline_tree import OutlineTreeWidget
 
@@ -75,6 +78,30 @@ class _GenerateTask(QRunnable):
         self._signals.done.emit(outline)
 
 
+
+class _IconSignals(QObject):
+    done = Signal(object)
+    failed = Signal(str)
+
+
+class _IconTask(QRunnable):
+    """在工作线程里跑 AI 图标生成。"""
+
+    def __init__(self, factory, signals: _IconSignals) -> None:
+        super().__init__()
+        self._factory = factory
+        self._signals = signals
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self._factory()
+        except Exception as exc:  # noqa: BLE001
+            self._signals.failed.emit(str(exc))
+            return
+        self._signals.done.emit(result)
+
+
 class WizardPage(QWidget):
     """课程创建向导。"""
 
@@ -92,12 +119,18 @@ class WizardPage(QWidget):
         self._pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         self._draft: OutlineDraft | None = None
         self._material_paths: list[Path] = []
+        self._icon_color = "#E86A92"
+        self._icon_bg = "#FFF5F8"
+        self._icon_svg: str | None = None
         self._outline: CourseOutline | None = None
         self._token = CancellationToken()
         self._signals = _Signals()
         self._signals.chunk.connect(self._on_chunk)
         self._signals.done.connect(self._on_done)
         self._signals.failed.connect(self._on_failed)
+        self._icon_signals = _IconSignals()
+        self._icon_signals.done.connect(self._on_icon_ready)
+        self._icon_signals.failed.connect(lambda message: (self.icon_hint.setText(f"图标生成失败：{message}"), self.ai_icon_button.setEnabled(True)))
 
         layout = QVBoxLayout(self)
         title = QLabel("新建课程")
@@ -109,6 +142,7 @@ class WizardPage(QWidget):
         self.stack.addWidget(self._build_clarify_step())
         self.stack.addWidget(self._build_generate_step())
         self.stack.addWidget(self._build_preview_step())
+        self._rebuild_icon_list()
         layout.addWidget(self.stack, 1)
 
     # --- 四个步骤 -------------------------------------------------------
@@ -139,6 +173,33 @@ class WizardPage(QWidget):
         self.material_label.setProperty("role", "muted")
         self.material_label.setWordWrap(True)
         layout.addWidget(self.material_label)
+
+        layout.addWidget(QLabel("课程图标（选预设 / 换颜色 / 或让 AI 生成）"))
+        self.icon_list = QListWidget()
+        self.icon_list.setViewMode(QListView.ViewMode.IconMode)
+        self.icon_list.setIconSize(QSize(48, 48))
+        self.icon_list.setGridSize(QSize(66, 76))
+        self.icon_list.setMovement(QListView.Movement.Static)
+        self.icon_list.setFixedHeight(118)
+        self.icon_list.currentRowChanged.connect(lambda *_: self._refresh_icon_preview())
+        layout.addWidget(self.icon_list)
+
+        icon_row = QHBoxLayout()
+        self.icon_preview = QLabel()
+        icon_row.addWidget(self.icon_preview)
+        self.icon_color_button = QPushButton("主色…")
+        self.icon_color_button.clicked.connect(lambda: self._pick_icon_color(color=True))
+        icon_row.addWidget(self.icon_color_button)
+        self.icon_bg_button = QPushButton("底色…")
+        self.icon_bg_button.clicked.connect(lambda: self._pick_icon_color(color=False))
+        icon_row.addWidget(self.icon_bg_button)
+        self.ai_icon_button = QPushButton("让 AI 生成图标")
+        self.ai_icon_button.clicked.connect(self._on_generate_icon)
+        icon_row.addWidget(self.ai_icon_button)
+        self.icon_hint = QLabel("")
+        self.icon_hint.setProperty("role", "muted")
+        icon_row.addWidget(self.icon_hint, 1)
+        layout.addLayout(icon_row)
 
         note = QLabel("支持 PDF / PPTX / DOCX / TXT / MD 与图片；解析在后台进行，可随时跳过。")
         note.setProperty("role", "muted")
@@ -278,6 +339,99 @@ class WizardPage(QWidget):
             f"已解析 {parsed} 份资料" + (f"，{failed} 份失败" if failed else "") + "；生成大纲时会被引用。"
         )
 
+    # --- 图标 -----------------------------------------------------------
+    def _current_icon(self) -> CourseIcon:
+        item = self.icon_list.currentItem()
+        preset_id = str(item.data(Qt.ItemDataRole.UserRole)) if item is not None else "general"
+        return CourseIcon(kind="preset", value=preset_id, color=self._icon_color, bg=self._icon_bg)
+
+    def _rebuild_icon_list(self) -> None:
+        from ...services import icon_service
+        from ..icon_render import course_icon_pixmap
+
+        self.icon_list.blockSignals(True)
+        self.icon_list.clear()
+        for preset_id, label in icon_service.preset_choices():
+            icon = CourseIcon(kind="preset", value=preset_id, color=self._icon_color, bg=self._icon_bg)
+            item = QListWidgetItem(course_icon_pixmap(Path("."), icon, size=64), label)
+            item.setData(Qt.ItemDataRole.UserRole, preset_id)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+            self.icon_list.addItem(item)
+        self.icon_list.blockSignals(False)
+        if self.icon_list.count():
+            self.icon_list.setCurrentRow(0)
+        self._refresh_icon_preview()
+
+    def _refresh_icon_preview(self) -> None:
+        from ..icon_render import course_icon_pixmap
+
+        icon = self._current_icon()
+        if self._icon_svg:
+            from ...services.icon_service import tint_svg
+
+            pixmap = course_icon_pixmap(Path("."), icon, size=72)
+            from ..icon_render import svg_to_pixmap
+
+            inner = svg_to_pixmap(tint_svg(self._icon_svg, self._icon_color), size=44)
+            pixmap = course_icon_pixmap(Path("."), icon, size=72)
+            from PySide6.QtGui import QPainter
+
+            painter = QPainter(pixmap)
+            try:
+                painter.drawPixmap(14, 14, inner)
+            finally:
+                painter.end()
+            self.icon_preview.setPixmap(pixmap)
+        else:
+            self.icon_preview.setPixmap(course_icon_pixmap(Path("."), icon, size=72))
+
+    def _pick_icon_color(self, *, color: bool) -> None:
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+
+        current = QColor(self._icon_color if color else self._icon_bg)
+        chosen = QColorDialog.getColor(current, self, "选择颜色")
+        if not chosen.isValid():
+            return
+        if color:
+            self._icon_color = chosen.name().upper()
+        else:
+            self._icon_bg = chosen.name().upper()
+        self._rebuild_icon_list()
+
+    def _on_generate_icon(self) -> None:
+        """让 AI 生成图标（工作线程；失败自动降级到预设）。"""
+        client = getattr(self._service, "client", None)
+        if client is None:
+            self.icon_hint.setText("没有可用的模型配置，已保持预设图标")
+            return
+        name = self.name_edit.text().strip() or "我的课程"
+        self.ai_icon_button.setEnabled(False)
+        self.icon_hint.setText("正在生成图标…")
+
+        def factory():
+            from ...services.icon_service import IconService
+
+            service = IconService(client=client)
+            return asyncio.run(
+                service.generate_with_ai(
+                    Path("."), concept=name, color=self._icon_color, bg=self._icon_bg
+                )
+            )
+
+        self._pool.start(_IconTask(factory, self._icon_signals))
+
+    @Slot(object)
+    def _on_icon_ready(self, result) -> None:
+        self.ai_icon_button.setEnabled(True)
+        if getattr(result, "generated_by_ai", False):
+            self._icon_svg = result.svg
+            self.icon_hint.setText("AI 图标已生成并通过自检")
+        else:
+            self._icon_svg = None
+            self.icon_hint.setText("；".join(getattr(result, "issues", [])) or "已改用预设图标")
+        self._refresh_icon_preview()
+
     @Slot()
     def _on_basic_next(self) -> None:
         name = self.name_edit.text().strip()
@@ -289,6 +443,8 @@ class WizardPage(QWidget):
             name,
             user_outline=self.user_outline_edit.toPlainText().strip(),
             material_summary=getattr(self, "_material_summary", ""),
+            icon=self._current_icon(),
+            icon_svg=self._icon_svg,
             tags=tags,
         )
         if self._draft.name != name:

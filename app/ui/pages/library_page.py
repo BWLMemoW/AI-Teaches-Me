@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QListView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -17,7 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...services import course_service
+from ...services import course_service, icon_service
+from ..icon_render import course_icon_pixmap
 from ...services.library_service import SORT_OPTIONS, VIEW_MODES, LibraryFilter, LibraryService
 
 
@@ -37,6 +39,7 @@ class LibraryPage(QWidget):
         self._courses_dir = Path(courses_dir)
         self._service = service
         self._summaries: list[course_service.CourseSummary] = []
+        self._icon_cache: dict[str, object] = {}
 
         layout = QVBoxLayout(self)
 
@@ -71,6 +74,12 @@ class LibraryPage(QWidget):
             self.sort_combo.addItem("排序：" + name, key)
         self.sort_combo.currentIndexChanged.connect(lambda *_: self.apply_filters())
         filters.addWidget(self.sort_combo)
+
+        self.view_mode_combo = QComboBox()
+        self.view_mode_combo.addItem("网格", "grid")
+        self.view_mode_combo.addItem("列表", "list")
+        self.view_mode_combo.currentIndexChanged.connect(self._apply_view_mode)
+        filters.addWidget(self.view_mode_combo)
         layout.addLayout(filters)
 
         tag_row = QHBoxLayout()
@@ -115,6 +124,10 @@ class LibraryPage(QWidget):
         layout.addWidget(self.empty_label)
 
         self.course_list = QListWidget()
+        self.course_list.setIconSize(QSize(72, 72))
+        self.course_list.setGridSize(QSize(180, 168))
+        self.course_list.setSpacing(8)
+        self.course_list.setWordWrap(True)
         self.course_list.itemActivated.connect(self._on_item_activated)
         self.course_list.itemDoubleClicked.connect(self._on_item_activated)
         self.course_list.currentRowChanged.connect(lambda *_: self._update_buttons())
@@ -158,7 +171,7 @@ class LibraryPage(QWidget):
         else:
             self._summaries = course_service.scan_courses(self._courses_dir)
         self._reload_tags()
-        self.apply_filters()
+        self._apply_view_mode()
         self.configure_button.setVisible(needs_api_setup)
         if needs_api_setup:
             self.banner.setText("尚未配置 API Key：课程相关操作会先引导你去设置页（AC-02）。")
@@ -206,11 +219,46 @@ class LibraryPage(QWidget):
         self.set_courses(items)
         return items
 
+    def _icon_for(self, summary: course_service.CourseSummary):
+        """课程图标位图（带缓存；服务层只给 SVG，渲染在 UI 层）。"""
+        cached = self._icon_cache.get(summary.id)
+        if cached is not None:
+            return cached
+        icon = icon_service.IconService.load(summary.path)
+        pixmap = course_icon_pixmap(summary.path, icon, size=96)
+        self._icon_cache[summary.id] = pixmap
+        return pixmap
+
+    def _apply_view_mode(self) -> None:
+        mode = str(self.view_mode_combo.currentData() or "grid")
+        if mode == "grid":
+            self.course_list.setViewMode(QListView.ViewMode.IconMode)
+            self.course_list.setResizeMode(QListView.ResizeMode.Adjust)
+            self.course_list.setMovement(QListView.Movement.Static)
+            self.course_list.setUniformItemSizes(True)
+        else:
+            self.course_list.setViewMode(QListView.ViewMode.ListMode)
+        self.set_courses(self._summaries)
+
+    def _card_text(self, summary: course_service.CourseSummary) -> str:
+        lines = [summary.name]
+        badge = "示例 · " if summary.seed else ""
+        lines.append(f"{badge}{summary.lessons} 小节 · {int(summary.progress_ratio * 100)}%")
+        if summary.tags:
+            lines.append("#" + " #".join(summary.tags[:3]))
+        return "\n".join(lines)
+
     def set_courses(self, items: list[course_service.CourseSummary]) -> None:
+        self._summaries = list(items)
+        grid = str(self.view_mode_combo.currentData() or "grid") == "grid"
         self.course_list.clear()
         for summary in items:
-            item = QListWidgetItem(self._describe(summary))
+            item = QListWidgetItem(self._card_text(summary) if grid else self._describe(summary))
             item.setData(Qt.ItemDataRole.UserRole, summary)
+            if grid:
+                item.setIcon(self._icon_for(summary))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
+                item.setToolTip(self._describe(summary))
             self.course_list.addItem(item)
         self.empty_label.setVisible(not items)
         if not items:

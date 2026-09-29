@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 
@@ -161,6 +162,31 @@ class CourseBackground(Base):
     dim: float = 0.1
 
 
+class CourseIcon(Base):
+    """课程图标（M8 新增字段）：预设 / 自绘 SVG / AI 生成，全部离线。
+
+    ``value`` 对 ``preset`` 是预设 id（如 ``math``），对 ``svg`` / ``ai`` 是相对课程的路径
+    （``assets/icon.svg``）。``color`` 会替换 SVG 里的 ``currentColor``。
+    """
+
+    kind: Literal["preset", "svg", "ai"] = "preset"
+    value: str = "general"
+    color: str = "#E86A92"
+    bg: str = "#FFF5F8"
+
+    @field_validator("color", "bg")
+    @classmethod
+    def _hex_color(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", text):
+            raise ValueError("颜色必须是 #RRGGBB 形式")
+        return text.upper()
+
+    @property
+    def is_preset(self) -> bool:
+        return self.kind == "preset"
+
+
 class CourseMeta(Base):
     schema_version: int = 1
     id: str
@@ -169,6 +195,7 @@ class CourseMeta(Base):
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
     cover: str | None = None
+    icon: CourseIcon | None = None
     theme: str | None = None
     persona: str | None = None
     tags: list[str] = Field(default_factory=list)

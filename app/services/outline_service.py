@@ -50,6 +50,8 @@ class OutlineDraft:
     outline: CourseOutline | None = None
     theme: str | None = None
     persona: str | None = None
+    icon: object | None = None
+    icon_svg: str | None = None
     tags: list[str] = field(default_factory=list)
     llm_profile: str | None = None
 
@@ -98,6 +100,8 @@ class OutlineService:
         material_summary: str = "",
         theme: str | None = None,
         persona: str | None = None,
+        icon: object | None = None,
+        icon_svg: str | None = None,
         tags: Sequence[str] = (),
         llm_profile: str | None = None,
     ) -> OutlineDraft:
@@ -110,6 +114,8 @@ class OutlineService:
             material_summary=material_summary,
             theme=theme,
             persona=persona,
+            icon=icon,
+            icon_svg=icon_svg,
             tags=[str(tag) for tag in tags],
             llm_profile=llm_profile,
         )
@@ -176,9 +182,31 @@ class OutlineService:
         target_outline.course_id = draft.course_id
 
         written: list[Path] = []
+        resolved_icon = draft.icon
+        if draft.icon_svg or draft.icon is not None:
+            from .icon_service import IconService
+
+            service = IconService()
+            if draft.icon_svg:
+                outcome = service.apply_svg(
+                    course_dir,
+                    draft.icon_svg,
+                    color=getattr(draft.icon, "color", "#E86A92"),
+                    bg=getattr(draft.icon, "bg", "#FFF5F8"),
+                )
+            else:
+                outcome = service.apply_preset(
+                    course_dir,
+                    getattr(draft.icon, "value", "general"),
+                    color=getattr(draft.icon, "color", "#E86A92"),
+                    bg=getattr(draft.icon, "bg", "#FFF5F8"),
+                )
+            resolved_icon = outcome.icon
+
         meta = CourseMeta(
             id=draft.course_id,
             name=name,
+            icon=resolved_icon,
             theme=draft.theme,
             persona=draft.persona,
             tags=list(draft.tags),

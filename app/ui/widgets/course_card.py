@@ -184,6 +184,7 @@ class CourseCard(QFrame):
             f" border: {width}px solid {border}; border-radius: 16px; }}"
             f"#CourseCard:hover {{ border-color: {self.style_tokens.primary};"
             f" background-color: {self.style_tokens.surface_alt}; }}"
+            "#CourseCard QLabel { background-color: transparent; }"
             "QProgressBar { background-color: #00000000; border: none; }"
             f"QProgressBar::chunk {{ background-color: {self.style_tokens.primary}; border-radius: 3px; }}"
         )

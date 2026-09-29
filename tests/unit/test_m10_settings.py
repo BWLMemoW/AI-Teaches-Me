@@ -155,3 +155,28 @@ def test_tag_strip_hidden_when_no_tags(qtbot, tmp_path: Path) -> None:
     assert page.tags_list.isHidden() is True
     assert page.tag_label.isHidden() is True
     assert page.tags_list.height() <= 40  # 紧凑胶囊条，不再是一大条白底
+
+
+# --- 视觉回归：文字底色 ---------------------------------------------------
+def test_theme_qss_makes_labels_transparent() -> None:
+    """全局 QSS 不能给 QLabel 刷背景色（否则每行文字后面会出现突兀底纹）。"""
+    from app.ui.theme.presets import PRESETS
+    from app.ui.theme.qss import build_qss
+
+    for theme in PRESETS.values():
+        qss = build_qss(theme, "light")
+        assert "QLabel { background-color: transparent; }" in qss
+
+
+def test_course_card_labels_are_transparent(qtbot, tmp_path) -> None:
+    from app.bootstrap import bootstrap_workspace
+    from app.infra.secret_store import InMemoryBackend, SecretStore
+    from app.services import course_service
+    from app.ui.widgets.course_card import CourseCard
+
+    bootstrap_workspace(tmp_path, store=SecretStore(backend=InMemoryBackend()), configure_file_logging=False)
+    summary = course_service.scan_courses(tmp_path / "Courses")[0]
+    card = CourseCard(summary)
+    qtbot.addWidget(card)
+
+    assert "#CourseCard QLabel { background-color: transparent; }" in card.styleSheet()

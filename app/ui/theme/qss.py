@@ -124,6 +124,8 @@ QWidget {{
   font-size: {base}px;
 }}
 QMainWindow, QDialog {{ background-color: {c.bg}; }}
+/* 关键：QLabel 必须透明，否则全局 QWidget 背景会在每行文字后面刷出一条底纹 */
+QLabel {{ background-color: transparent; }}
 QLabel[role="title"] {{ font-size: {title}px; font-weight: 600; }}
 QLabel[role="subtitle"] {{ color: {c.text_dim}; }}
 QLabel[role="muted"] {{ color: {c.text_muted}; font-size: {small}px; }}

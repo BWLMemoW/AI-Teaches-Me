@@ -1,10 +1,30 @@
-' AI Teaches Me —— 双击启动（pythonw 无需控制台；窗口样式必须用 1=正常显示，用 0 会把主窗口一起隐藏）
+' AI Teaches Me launcher.
+' NOTE: Windows Script Host reads .vbs as ANSI, so this file is kept PURE ASCII.
+' Never use window style 0 here: it hides Qt's main window (SW_HIDE).
 Option Explicit
-Dim shell, fso, root, pythonw, venv, cmd
+Dim shell, fso, root, pythonw, venv, cmd, wmi, procs, proc, pid
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 root = fso.GetParentFolderName(WScript.ScriptFullName)
 
+' 1) stop previous instances, so a double-click always runs the latest code
+On Error Resume Next
+Set wmi = GetObject("winmgmts:\\.\root\cimv2")
+If Not IsEmpty(wmi) Then
+    Set procs = wmi.ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'python%'")
+    For Each proc In procs
+        If Not IsNull(proc.CommandLine) Then
+            If InStr(proc.CommandLine, "app.main") > 0 Then
+                pid = proc.ProcessId
+                shell.Run "taskkill /PID " & pid & " /F", 0, True
+            End If
+        End If
+    Next
+End If
+Err.Clear
+On Error GoTo 0
+
+' 2) choose pythonw: project venv first, then system Python
 venv = root & "\.venv\Scripts\pythonw.exe"
 If fso.FileExists(venv) Then
     pythonw = venv
@@ -14,17 +34,7 @@ Else
     pythonw = "pythonw.exe"
 End If
 
-' 先关掉正在运行的旧实例，保证双击后一定是最新代码
-Dim wmi, procs, proc
-Set wmi = GetObject("winmgmts:\\.\root\cimv2")
-Set procs = wmi.ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'python%'")
-For Each proc In procs
-    If Not IsNull(proc.CommandLine) Then
-        If InStr(proc.CommandLine, "app.main") > 0 Then
-            shell.Run "taskkill /PID " & proc.ProcessId & " /F", 0, True
-        End If
-    End If
-Next
+' 3) launch (window style 1 = normal)
 shell.CurrentDirectory = root
 cmd = """" & pythonw & """ -m app.main"
 shell.Run cmd, 1, False

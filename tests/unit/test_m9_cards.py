@@ -193,6 +193,8 @@ def test_launcher_kills_previous_instance() -> None:
     text = Path("启动 AI Teaches Me.vbs").read_text(encoding="utf-8")
 
     assert "Win32_Process" in text and "taskkill" in text
+    # WSH 按 ANSI 读 .vbs：脚本必须是纯 ASCII，否则中文注释会破坏解析（曾导致「变量未定义 wmi」）
+    assert all(ord(ch) < 128 for ch in text)
     assert "shell.Run cmd, 1, False" in text  # 窗口样式必须是 1（正常显示）
 
 

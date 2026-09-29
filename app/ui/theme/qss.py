@@ -245,8 +245,23 @@ QListWidget#NavList::item {{
 QListWidget#NavList::item:hover {{ background-color: {tint(0.08)}; color: {c.text}; }}
 QListWidget#NavList::item:selected {{ background-color: {tint(0.14)}; color: {c.primary}; font-weight: 600; }}
 
-/* 追问抽屉：记录区与输入框在视觉上区分开（M23） */
-QPlainTextEdit#ChatHistory {{ background-color: {c.surface_alt}; }}
+/* 追问抽屉：气泡式对话（M23）—— 用户在右（主色浅底），老师在左（面板色底） */
+QScrollArea#ChatHistory {{
+  background-color: {c.bg_soft};
+  border: 1px solid {c.border};
+  border-radius: 12px;
+}}
+QWidget#ChatHistoryHost {{ background: transparent; }}
+QFrame#ChatBubble {{ border-radius: 14px; padding: 0px; }}
+QFrame#ChatBubble[role="assistant"] {{
+  background-color: {c.surface};
+  border: 1px solid {c.border};
+}}
+QFrame#ChatBubble[role="user"] {{
+  background-color: {tint(0.14)};
+  border: 1px solid {tint(0.26)};
+}}
+QLabel#ChatBubbleText {{ background: transparent; }}
 
 /* 列表 / 树 */
 QListWidget, QTreeWidget, QTreeView, QListView {{

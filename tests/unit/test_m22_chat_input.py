@@ -44,8 +44,9 @@ def test_chat_history_is_not_focusable(qtbot) -> None:
     drawer = ChatDrawer()
     qtbot.addWidget(drawer)
 
-    assert drawer.history.isReadOnly() is True
     assert drawer.history.focusPolicy() == Qt.FocusPolicy.NoFocus
+    # 记录区是滚动展示区，不该具备任何「输入」能力
+    assert not hasattr(drawer.history, "setPlainText")
     assert drawer.input_edit.focusPolicy() == Qt.FocusPolicy.StrongFocus
     assert "只读" in drawer.history_label.text() or "记录" in drawer.history_label.text()
 

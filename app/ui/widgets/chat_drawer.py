@@ -1,10 +1,11 @@
 """追问抽屉（《项目文档》§4.7 FR-07、§11.4 ``ChatDrawer``）。
 
-M23 起回答**渲染 Markdown**（标题/列表/表格/代码块），不再吐原始 NDJSON：
-* 记录区用 ``QTextBrowser``（Qt 富文本，支持表格与等宽代码）；
-* 模型流式吐 NDJSON → 解析成内容块 → 逐块转 Markdown → 追加渲染（块级流式）；
-* 记录区只读且不可获焦；输入框在下方与发送按钮同行；支持「放大」到独立窗口；
-* 同时维护一份 Markdown 源（``conversation_markdown``），供「放大」窗口保留结构地展示。
+M23 起改成**气泡式对话**：
+* 用户的追问靠右（主色浅底），老师的回答靠左（面板色底），像普通聊天应用；
+* 老师回答渲染 Markdown（标题/列表/表格/代码块）——模型流式吐 NDJSON，
+  解析成内容块后逐块转 Markdown，同一个气泡里原地更新（块级流式）；
+* 记录区整块不可获焦、不可编辑，避免被当成输入框；输入框在下方与发送按钮同行；
+* 内部维护 Markdown 源，供「放大」窗口与导出保留结构。
 """
 
 from __future__ import annotations
@@ -12,18 +13,25 @@ from __future__ import annotations
 from html import escape
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
-    QTextBrowser,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from ...core.models import ContentBlock
 from ...llm.stream import BlockStreamParser
+
+CODE_FONT = "'JetBrains Mono', Consolas, 'Courier New', monospace"
+CODE_BG = "#F2F4F7"
+ROLE_PREFIX = {"user": "我：", "assistant": "老师："}
 
 
 def markdown_to_html(text: str) -> str:
@@ -32,9 +40,15 @@ def markdown_to_html(text: str) -> str:
     try:
         import markdown as markdown_module
 
-        return markdown_module.markdown(source, extensions=["tables", "fenced_code", "sane_lists"])
+        html = markdown_module.markdown(source, extensions=["tables", "fenced_code", "sane_lists"])
     except Exception:  # noqa: BLE001
         return "<pre>" + escape(source) + "</pre>"
+    # Qt 富文本不认 <style> 选择器，代码的等宽字体与底色只能内联（§11.1 代码块样式）
+    html = html.replace(
+        "<pre>", f'<pre style="font-family:{CODE_FONT}; background-color:{CODE_BG}; padding:6px;">'
+    )
+    html = html.replace("<code>", f'<code style="font-family:{CODE_FONT};">')
+    return html
 
 
 def block_to_markdown(block: dict) -> str:
@@ -45,13 +59,17 @@ def block_to_markdown(block: dict) -> str:
         return "```json\n" + str(block) + "\n```"
 
 
-def blocks_to_html(blocks: list[dict]) -> str:
-    parts: list[str] = []
-    for block in blocks:
-        markdown_text = block_to_markdown(block)
-        if markdown_text.strip():
-            parts.append(markdown_to_html(markdown_text))
-    return "".join(parts)
+def blocks_to_markdown(blocks: list[dict]) -> str:
+    return "\n\n".join(
+        part.strip() for part in (block_to_markdown(block) for block in blocks) if part.strip()
+    )
+
+
+def html_to_plain(html: str) -> str:
+    """富文本 → 纯文本（用 Qt 自己的解析器，结果与界面所见一致）。"""
+    document = QTextDocument()
+    document.setHtml(html)
+    return document.toPlainText()
 
 
 class _InputBox(QPlainTextEdit):
@@ -69,6 +87,124 @@ class _InputBox(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
+class _Bubble(QFrame):
+    """一个对话气泡：``role`` 为 ``user``（靠右）或 ``assistant``（靠左）。"""
+
+    def __init__(self, role: str, parent=None) -> None:
+        super().__init__(parent)
+        self.role = role
+        self.setObjectName("ChatBubble")
+        self.setProperty("role", role)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 9, 12, 9)
+        layout.setSpacing(0)
+        self.text = QLabel()
+        self.text.setObjectName("ChatBubbleText")
+        self.text.setTextFormat(Qt.TextFormat.RichText)
+        self.text.setWordWrap(True)
+        self.text.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        layout.addWidget(self.text)
+        self.markdown = ""
+
+    def set_markdown(self, markdown: str) -> None:
+        self.markdown = markdown
+        self.text.setText(markdown_to_html(markdown))
+
+    def to_plain_text(self) -> str:
+        return html_to_plain(self.text.text())
+
+
+class ChatHistoryView(QScrollArea):
+    """气泡记录区：只读、不可获焦，仅用于展示。"""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ChatHistory")
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 整块不可获焦：这里不是输入框
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        self._host = QWidget()
+        self._host.setObjectName("ChatHistoryHost")
+        self._layout = QVBoxLayout(self._host)
+        self._layout.setContentsMargins(10, 10, 10, 10)
+        self._layout.setSpacing(10)
+        self._bubbles: list[_Bubble] = []
+
+        self.empty_hint = QLabel("还没有追问记录：选中讲义里的片段提问，或在下面直接输入。")
+        self.empty_hint.setProperty("role", "muted")
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint.setWordWrap(True)
+        self._layout.addWidget(self.empty_hint)
+        self._layout.addStretch(1)
+        self.setWidget(self._host)
+
+    # --- 增删 -----------------------------------------------------------
+    def add_bubble(self, role: str, markdown: str) -> _Bubble:
+        bubble = _Bubble(role)
+        bubble.set_markdown(markdown)
+        row = QWidget()
+        box = QHBoxLayout(row)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        if role == "user":
+            box.addStretch(1)
+            box.addWidget(bubble)
+        else:
+            box.addWidget(bubble)
+            box.addStretch(1)
+        self._layout.insertWidget(self._layout.count() - 1, row)
+        self._bubbles.append(bubble)
+        self.empty_hint.setVisible(False)
+        self._apply_bubble_width()
+        self.scroll_to_bottom()
+        return bubble
+
+    def clear_bubbles(self) -> None:
+        while self._layout.count() > 1:  # 保留末尾 stretch
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget is not self.empty_hint:
+                widget.deleteLater()
+        self._bubbles = []
+        self.empty_hint.setVisible(True)
+
+    # --- 读取 -----------------------------------------------------------
+    def toPlainText(self) -> str:  # noqa: N802 - 与旧接口保持一致
+        return "\n\n".join(
+            ROLE_PREFIX.get(bubble.role, "") + bubble.to_plain_text() for bubble in self._bubbles
+        )
+
+    def conversation_markdown(self) -> str:
+        parts: list[str] = []
+        for bubble in self._bubbles:
+            body = bubble.markdown.strip()
+            if not body:
+                continue
+            if bubble.role == "user":
+                parts.append(f"**我：** {body}")
+            else:
+                parts.append(f"**老师：**\n\n{body}")
+        return "\n\n".join(parts)
+
+    def scroll_to_bottom(self) -> None:
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    # --- 布局 -----------------------------------------------------------
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        super().resizeEvent(event)
+        self._apply_bubble_width()
+
+    def _apply_bubble_width(self) -> None:
+        """气泡最宽占可视宽度的 ~84%，保证长段落换行而不是横向溢出。"""
+        width = max(200, int(self.viewport().width() * 0.84))
+        for bubble in self._bubbles:
+            bubble.setMaximumWidth(width)
+
+
 class ChatDrawer(QWidget):
     send_requested = Signal(str, str)  # (问题, 选中片段)
     stop_requested = Signal()
@@ -76,7 +212,7 @@ class ChatDrawer(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setMinimumWidth(380)  # 太窄渲染不好看（M23）
+        self.setMinimumWidth(380)  # 太窄气泡换行难看（M23）
         layout = QVBoxLayout(self)
         title = QLabel("追问")
         title.setProperty("role", "subtitle")
@@ -87,11 +223,7 @@ class ChatDrawer(QWidget):
         self.history_label.setWordWrap(True)
         layout.addWidget(self.history_label)
 
-        self.history = QTextBrowser()
-        self.history.setOpenExternalLinks(False)
-        self.history.setReadOnly(True)
-        self.history.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.history.setObjectName("ChatHistory")
+        self.history = ChatHistoryView()
         self.history.setMinimumHeight(240)
         layout.addWidget(self.history, 1)
 
@@ -129,10 +261,9 @@ class ChatDrawer(QWidget):
         composer.addLayout(buttons)
         layout.addLayout(composer)
 
-        # 回答流式解析状态 + Markdown 源（供放大窗口）
+        # 流式回答状态
         self._parser = BlockStreamParser()
-        self._rendered_blocks = 0
-        self._transcript_md: list[str] = []
+        self._current_bubble: _Bubble | None = None
 
     # --- 加载与写入 -----------------------------------------------------
     selection = ""
@@ -146,51 +277,48 @@ class ChatDrawer(QWidget):
         self.selection_label.setText(f"选中：{text[:60]}" if text else "未选中片段")
 
     def clear(self) -> None:
-        self.history.clear()
+        self.history.clear_bubbles()
         self._parser = BlockStreamParser()
-        self._rendered_blocks = 0
-        self._transcript_md = []
-
-    def _push_markdown(self, text: str) -> None:
-        if text:
-            self._transcript_md.append(text)
+        self._current_bubble = None
 
     def append_user(self, text: str) -> None:
-        self.history.append(
-            f'<p style="margin:8px 0 2px;"><b>我：</b>{escape(str(text))}</p>'
-        )
-        self._push_markdown(f"**我：** {text}\n\n")
+        self.history.add_bubble("user", str(text))
 
     def begin_answer(self) -> None:
-        """开始一段回答：重置解析器并写入「老师：」标签。"""
+        """开始一段回答：新建一个左侧气泡，后续流式内容原地更新它。"""
         self._parser = BlockStreamParser()
-        self._rendered_blocks = 0
-        self.history.append('<p style="margin:8px 0 2px;"><b>老师：</b></p>')
-        self._push_markdown("**老师：**\n\n")
+        self._current_bubble = self.history.add_bubble("assistant", "（正在思考…）")
 
     def feed_answer_piece(self, piece: str) -> None:
-        """流式喂入 NDJSON 片段：每完成一个内容块就渲染一段 Markdown。"""
+        """流式喂入 NDJSON 片段：每解析出一个内容块就刷新一次气泡。"""
         self._parser.feed(piece)
-        self._flush_new_blocks()
+        self._refresh_current_bubble()
 
     def end_answer(self) -> None:
         self._parser.finish()
-        self._flush_new_blocks()
+        self._refresh_current_bubble()
         if self._parser.protocol_broken:
             fallback = self._parser.fallback_markdown()
-            self.history.append(markdown_to_html(fallback))
-            self._push_markdown(fallback + "\n\n")
+            if self._current_bubble is not None:
+                existing = blocks_to_markdown(self._parser.blocks)
+                merged = (existing + "\n\n" + fallback).strip() if existing.strip() else fallback
+                self._current_bubble.set_markdown(merged)
+        if self._current_bubble is not None and not self._current_bubble.markdown.strip():
+            self._current_bubble.set_markdown("（没有拿到内容，请重试一次。）")
+        self._current_bubble = None
+        self.history.scroll_to_bottom()
 
-    def _flush_new_blocks(self) -> None:
-        blocks = self._parser.blocks[self._rendered_blocks :]
-        if not blocks:
+    def _refresh_current_bubble(self) -> None:
+        if self._current_bubble is None:
             return
-        self._rendered_blocks = len(self._parser.blocks)
-        self.history.append(blocks_to_html(blocks))
-        for block in blocks:
-            self._push_markdown(block_to_markdown(block).rstrip() + "\n\n")
-        scrollbar = self.history.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        markdown = blocks_to_markdown(self._parser.blocks)
+        partial = self._parser.partial_text()
+        if partial:
+            markdown = (markdown + "\n\n" + partial).strip()
+        if markdown.strip():
+            self._current_bubble.set_markdown(markdown)
+            self.history._apply_bubble_width()
+            self.history.scroll_to_bottom()
 
     def append_stream(self, piece: str) -> None:  # 兼容旧调用
         self.feed_answer_piece(piece)
@@ -212,18 +340,15 @@ class ChatDrawer(QWidget):
                 parser = BlockStreamParser()
                 parser.feed(raw)
                 parser.finish()
-                markdown_parts = [block_to_markdown(block) for block in parser.blocks]
-                html = blocks_to_html(parser.blocks) or markdown_to_html(raw)
-                markdown_source = "\n\n".join(part.strip() for part in markdown_parts if part.strip()) or raw
+                markdown = blocks_to_markdown(parser.blocks) or raw
             else:
-                html = markdown_to_html(raw)
-                markdown_source = raw
-            self.history.append('<p style="margin:8px 0 2px;"><b>老师：</b></p>' + html)
-            self._push_markdown("**老师：**\n\n" + markdown_source.strip() + "\n\n")
+                markdown = raw
+            self.history.add_bubble("assistant", markdown)
+        self.history.scroll_to_bottom()
 
     def conversation_markdown(self) -> str:
         """当前对话的 Markdown 源（供「放大」窗口保留结构地阅读）。"""
-        return "".join(self._transcript_md)
+        return self.history.conversation_markdown()
 
     # --- 交互 -----------------------------------------------------------
     def _on_send(self) -> None:

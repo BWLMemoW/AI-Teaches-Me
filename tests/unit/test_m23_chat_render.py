@@ -1,10 +1,11 @@
-"""M23 测试：追问回答渲染 Markdown（不再吐原始 NDJSON）、右栏宽度、放大窗口。"""
+"""M23 测试：追问气泡式对话（用户在右 / 老师在左）、Markdown 渲染、宽度与放大窗口。"""
 
 from __future__ import annotations
 
 import json
 
 import pytest
+from PySide6.QtCore import QPoint, Qt
 
 pytestmark = pytest.mark.ui
 
@@ -32,6 +33,64 @@ def test_answer_renders_markdown_not_raw_ndjson(qtbot) -> None:
     assert "print(1)" in plain
 
 
+def test_rich_elements_are_real_html(qtbot) -> None:
+    """表格/代码块必须真的是富文本元素（而不是被当成纯文本原样显示）。"""
+    from app.ui.widgets.chat_drawer import ChatDrawer
+
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+    drawer.begin_answer()
+    drawer.feed_answer_piece(
+        _ndjson({"type": "table", "headers": ["步骤", "做什么"], "rows": [["1", "对齐基"]]})
+    )
+    drawer.feed_answer_piece(_ndjson({"type": "code", "lang": "python", "code": "x = 1"}))
+    drawer.end_answer()
+
+    html = drawer.history._bubbles[0].text.text()
+    assert "<table" in html
+    assert "对齐基" in html
+    assert "monospace" in html  # 代码块内联了等宽字体
+    plain = drawer.history.toPlainText()
+    assert "对齐基" in plain and "x = 1" in plain
+
+def test_streaming_updates_one_bubble(qtbot) -> None:
+    """块级流式：多个内容块应落在同一个老师气泡里，而不是每块新建气泡。"""
+    from app.ui.widgets.chat_drawer import ChatDrawer
+
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+    drawer.begin_answer()
+    drawer.feed_answer_piece(_ndjson({"type": "text", "md": "第一块"}))
+    drawer.feed_answer_piece(_ndjson({"type": "summary", "points": ["要点一"]}))
+    assert len(drawer.history._bubbles) == 1
+    plain = drawer.history.toPlainText()
+    assert "第一块" in plain and "要点一" in plain
+
+
+def test_user_bubble_is_right_and_teacher_left(qtbot) -> None:
+    """主人要的布局：用户气泡靠右，老师气泡靠左。"""
+    from app.ui.widgets.chat_drawer import ChatDrawer
+
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+    drawer.resize(460, 560)
+    drawer.show()
+    drawer.append_user("短问题")
+    drawer.begin_answer()
+    drawer.feed_answer_piece(_ndjson({"type": "text", "md": "回答"}))
+    drawer.end_answer()
+
+    bubbles = drawer.history._bubbles
+    assert [bubble.role for bubble in bubbles] == ["user", "assistant"]
+    qtbot.wait(80)
+    host = drawer.history.widget()
+    user_x = bubbles[0].mapTo(host, QPoint(0, 0)).x()
+    teacher_x = bubbles[1].mapTo(host, QPoint(0, 0)).x()
+    assert user_x > teacher_x
+    assert teacher_x <= 12  # 老师气泡贴左边（只剩容器 10px 外边距）
+    assert bubbles[0].maximumWidth() >= 200
+
+
 def test_history_records_are_rendered(qtbot) -> None:
     """历史记录（落盘可能是 NDJSON）加载后也要渲染成可读文本。"""
     from app.ui.widgets.chat_drawer import ChatDrawer
@@ -50,8 +109,28 @@ def test_history_records_are_rendered(qtbot) -> None:
     assert "因为" in plain and "如此" in plain
 
 
+def test_conversation_markdown_keeps_structure(qtbot) -> None:
+    """「放大」窗口读的是 Markdown 源：结构（标题/列表/代码围栏）必须保留。"""
+    from app.ui.widgets.chat_drawer import ChatDrawer
+
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+    drawer.append_user("两个问题")
+    drawer.begin_answer()
+    drawer.feed_answer_piece(_ndjson({"type": "text", "md": "### 小标题\n\n- 甲\n- 乙"}))
+    drawer.feed_answer_piece(_ndjson({"type": "code", "lang": "python", "code": "x = 1"}))
+    drawer.end_answer()
+
+    md = drawer.conversation_markdown()
+    assert "**我：** 两个问题" in md
+    assert "老师：" in md
+    assert "### 小标题" in md and "- 甲" in md
+    assert "python" in md and "x = 1" in md
+    assert '{"type"' not in md
+
+
 def test_drawer_is_wide_enough_for_reading(qtbot) -> None:
-    """右栏太窄渲染难看：追问抽屉最小宽度 >= 380。"""
+    """右栏太窄气泡换行难看：追问抽屉最小宽度 >= 380。"""
     from app.ui.widgets.chat_drawer import ChatDrawer
 
     drawer = ChatDrawer()
@@ -138,22 +217,3 @@ def test_study_page_zoom_opens_document_window(qtbot, tmp_path, monkeypatch) -> 
         assert opened and "这是什么？" in opened[0]
     finally:
         services.index.close()
-
-def test_conversation_markdown_keeps_structure(qtbot) -> None:
-    """「放大」窗口读的是 Markdown 源：结构（标题/列表/代码围栏）必须保留。"""
-    from app.ui.widgets.chat_drawer import ChatDrawer
-
-    drawer = ChatDrawer()
-    qtbot.addWidget(drawer)
-    drawer.append_user("两个问题")
-    drawer.begin_answer()
-    drawer.feed_answer_piece(_ndjson({"type": "text", "md": "### 小标题\n\n- 甲\n- 乙"}))
-    drawer.feed_answer_piece(_ndjson({"type": "code", "lang": "python", "code": "x = 1"}))
-    drawer.end_answer()
-
-    md = drawer.conversation_markdown()
-    assert "**我：** 两个问题" in md
-    assert "**老师：**" in md
-    assert "### 小标题" in md and "- 甲" in md
-    assert "python" in md and "x = 1" in md
-    assert '{"type"' not in md

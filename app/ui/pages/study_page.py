@@ -104,6 +104,11 @@ class WebEngineRenderer:
     def render_blocks(self, blocks: list[dict]) -> None:
         self._run(f"window.ATM.renderBlocks({json.dumps(list(blocks), ensure_ascii=False)});")
 
+    def append_block(self, block: dict) -> None:
+        """流式追加：单个内容块到达即渲染（M20：边生成边输出）。"""
+        payload = json.dumps(dict(block), ensure_ascii=False)
+        self._run(f"window.ATM.appendBlock({payload});")
+
     def render_markdown(self, text: str) -> None:
         self._run(
             f"window.ATM.renderFallbackMarkdown({json.dumps(text, ensure_ascii=False)}, "
@@ -113,6 +118,7 @@ class WebEngineRenderer:
 
 class _Signals(QObject):
     chunk = Signal(str)
+    block = Signal(object)
     done = Signal(object)
     failed = Signal(str)
 
@@ -176,6 +182,7 @@ class StudyPage(QWidget):
         self._renderer = renderer if renderer is not None else WebEngineRenderer()
         self._signals = _Signals()
         self._signals.chunk.connect(self._on_chunk)
+        self._signals.block.connect(self._on_block_ready)
         self._signals.done.connect(self._on_done)
         self._signals.failed.connect(self._on_failed)
         self._token = CancellationToken()
@@ -445,14 +452,17 @@ class StudyPage(QWidget):
                 lesson_id=str((context.get("lesson") or {}).get("id") or ""),
                 course_id=str((context.get("course") or {}).get("id") or ""),
                 revision_reason=revision_reason,
-                on_block=lambda block: self.status_message.emit(
-                    f"已生成内容块：{block.get('type')}"
-                ),
+                on_block=lambda block: self._signals.block.emit(block),
             )
 
         self._mode = "generate"
         self.generate_button.setEnabled(False)
-        self.status_label.setText("正在生成讲义…（在工作线程里，可随时点「停止」）")
+        self.status_label.setText("正在生成讲义…（边生成边显示，可随时点「停止」）")
+        # 先给阅读区一个占位提示，避免长等待期间一片空白
+        self._renderer.render_blocks([
+            {"type": "callout", "style": "tip",
+             "md": "**正在生成讲义…** 内容会边生成边出现；需要时点「停止」会保留已生成的部分。"}
+        ])
         self._pool.start(_AsyncCallTask(factory, self._signals))
 
     def ask(self, question: str, selection: str = "") -> None:
@@ -612,6 +622,17 @@ class StudyPage(QWidget):
         self._token.cancel()
         self.status_message.emit("已请求停止（已生成内容保留）")
 
+    @Slot(object)
+    def _on_block_ready(self, block: object) -> None:
+        """工作线程解析出一个内容块 → 主线程立刻追加渲染（M20 流式体验）。"""
+        if not isinstance(block, dict):
+            return
+        appender = getattr(self._renderer, "append_block", None)
+        if callable(appender):
+            appender(block)
+        kind = str(block.get("type") or "")
+        if kind and kind != "done":
+            self.status_label.setText(f"正在生成… 已输出 {kind} 块")
     def _on_chunk(self, piece: str) -> None:
         if self._mode == "ask":
             self.chat_drawer.append_stream(piece)

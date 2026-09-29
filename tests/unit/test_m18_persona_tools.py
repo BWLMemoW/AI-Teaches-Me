@@ -1,4 +1,4 @@
-"""M18 测试：人设过滤器不再误删风格句；推理模型自动关闭工具循环。"""
+"""M18 测试：人设风格句保留 + 工具能力由 capabilities 驱动（不猜模型世代）。"""
 
 from __future__ import annotations
 
@@ -37,13 +37,13 @@ class _StubRenderer:
     def render_markdown(self, text: str) -> None: ...
 
 
-def _services(tmp_path: Path, *, chat_model: str = "deepseek-flash", allow_tools: bool = True) -> Services:
+def _services(tmp_path: Path, *, allow_tools: bool = True, tools_capable: bool = True) -> Services:
     result = bootstrap_workspace(
         tmp_path, store=SecretStore(backend=InMemoryBackend()), configure_file_logging=False
     )
     config = result.config
     config.generation.allow_tools = allow_tools
-    config.require_profile().chat_model = chat_model
+    config.require_profile().capabilities.tools = tools_capable
     index = SqliteIndex(tmp_path / "data" / "library.db")
     client = object()
     return Services(
@@ -60,15 +60,23 @@ def _services(tmp_path: Path, *, chat_model: str = "deepseek-flash", allow_tools
     )
 
 
+def test_default_profile_supports_tools() -> None:
+    """文档基线：默认档案 DeepSeek-flash 支持 function calling，默认就带工具。"""
+    from app.core.config import Capabilities, GenerationConfig, default_config
+
+    assert Capabilities().tools is True
+    assert GenerationConfig().allow_tools is True
+    assert default_config().require_profile().chat_model == "deepseek-flash"
+
+
 def test_persona_filter_keeps_style_lines() -> None:
-    """回归：旧过滤器只要出现「省略 / 输出」就删整行，把猫娘的「本喵」风格句也删了。"""
+    """回归：旧过滤器只要出现「省略 / 输出」就删整行，把猫娘的风格句也删了。"""
     service = PersonaService(user_dir=Path("personas"))
     assembler = PromptAssembler()
 
-    catgirl = service.get("catgirl-assistant")
-    body, dropped = assembler.filter_persona(catgirl.body)
+    body, dropped = assembler.filter_persona(service.get("catgirl-assistant").body)
 
-    assert "本喵" in body  # 风格句必须保留
+    assert "本喵" in body
     assert "不要省略术语的准确解释" in body
     assert len(dropped) <= 1
 
@@ -81,39 +89,38 @@ def test_persona_filter_keeps_style_lines() -> None:
 def test_persona_body_reaches_system_prompt() -> None:
     from app.agents.teacher import TeacherAgent
 
-    agent = TeacherAgent(client=None)
-    prompt = agent.system_prompt(persona_body="你自称本喵，句尾偶尔带喵。", depth="minimal")
+    prompt = TeacherAgent(client=None).system_prompt(persona_body="你自称本喵，句尾偶尔带喵。", depth="minimal")
 
     assert "本喵" in prompt
-    assert "五段式" in prompt or "教学骨架" in prompt  # 骨架仍在（人设不能覆盖结构）
+    assert "五段式" in prompt or "教学骨架" in prompt  # 人设不能覆盖结构
 
 
-def test_reasoner_model_auto_disables_tools(qtbot, tmp_path: Path) -> None:
-    services = _services(tmp_path, chat_model="deepseek-reasoner", allow_tools=True)
+def test_tools_follow_capabilities(qtbot, tmp_path: Path) -> None:
+    services = _services(tmp_path, allow_tools=True, tools_capable=True)
     page = StudyPage(services=services, renderer=_StubRenderer())
     qtbot.addWidget(page)
     try:
         page.open_course(tmp_path / "Courses" / "ATM 使用指南")
         executor, tools = page._build_tooling()
-        assert executor is None and tools is None  # 推理模型：自动纯流式
+        assert executor is not None and tools  # 能力开启 → 带 tools
     finally:
         services.index.close()
 
 
-def test_deepseek_chat_keeps_tools_when_enabled(qtbot, tmp_path: Path) -> None:
-    services = _services(tmp_path, chat_model="deepseek-chat", allow_tools=True)
+def test_tools_disabled_by_profile_capability(qtbot, tmp_path: Path) -> None:
+    services = _services(tmp_path, allow_tools=True, tools_capable=False)
     page = StudyPage(services=services, renderer=_StubRenderer())
     qtbot.addWidget(page)
     try:
         page.open_course(tmp_path / "Courses" / "ATM 使用指南")
         executor, tools = page._build_tooling()
-        assert executor is not None and tools  # deepseek-chat 支持 function calling
+        assert executor is None and tools is None
     finally:
         services.index.close()
 
 
-def test_tools_off_by_default(qtbot, tmp_path: Path) -> None:
-    services = _services(tmp_path, chat_model="deepseek-chat", allow_tools=False)
+def test_tools_disabled_by_generation_switch(qtbot, tmp_path: Path) -> None:
+    services = _services(tmp_path, allow_tools=False, tools_capable=True)
     page = StudyPage(services=services, renderer=_StubRenderer())
     qtbot.addWidget(page)
     try:

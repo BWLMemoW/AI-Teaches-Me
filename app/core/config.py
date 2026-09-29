@@ -68,6 +68,8 @@ class Capabilities(BaseModel):
 
     vision: bool = True
     hosted_web_search: bool = False
+    # 是否支持 function calling（默认档案 DeepSeek-flash 支持；由用户/探测结果维护，见 §3.5.5 约定 5）
+    tools: bool = True
 
 
 class LLMProfile(BaseModel):
@@ -174,8 +176,8 @@ class GenerationConfig(BaseModel):
     auto_note_on_complete: bool = True
     quiz_enabled: bool = True
     self_assessment_enabled: bool = True
-    # 是否允许 Agent 调用工具（function calling）。默认关闭：部分 OpenAI 兼容端点会以 422 拒绝 tools 载荷
-    allow_tools: bool = False
+    # 是否允许 Agent 调用工具（function calling）。默认开启；端点/模型不支持时客户端会自动降级重试
+    allow_tools: bool = True
     svg_review: SvgReviewConfig = Field(default_factory=SvgReviewConfig)
     # §2.8：流式回调节流 30–60ms
     stream_throttle_ms: int = 40

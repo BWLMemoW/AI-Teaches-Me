@@ -146,6 +146,10 @@ class SettingsPage(QWidget):
         form.addRow("最大 token", self.max_tokens_spin)
         form.addRow("超时（秒）", self.timeout_spin)
         form.addRow("代理", self.proxy_edit)
+
+        self.tools_capable_check = QCheckBox("该档案支持工具调用（function calling：联网 / 读资料 / 画图）")
+        self.tools_capable_check.toggled.connect(self._on_tools_capability)
+        form.addRow("", self.tools_capable_check)
         outer.addLayout(form)
 
         key_row = QHBoxLayout()
@@ -343,6 +347,9 @@ class SettingsPage(QWidget):
         self.max_tokens_spin.setValue(int(profile.max_tokens))
         self.timeout_spin.setValue(int(profile.timeout_seconds))
         self.proxy_edit.setText(profile.proxy or "")
+        self.tools_capable_check.blockSignals(True)
+        self.tools_capable_check.setChecked(bool(profile.capabilities.tools))
+        self.tools_capable_check.blockSignals(False)
         self.api_key_edit.clear()
         self._refresh_key_status()
 
@@ -356,6 +363,7 @@ class SettingsPage(QWidget):
         profile.max_tokens = int(self.max_tokens_spin.value())
         profile.timeout_seconds = int(self.timeout_spin.value())
         profile.proxy = self.proxy_edit.text().strip() or None
+        profile.capabilities.tools = bool(self.tools_capable_check.isChecked())
         return profile
 
     def _refresh_key_status(self) -> None:
@@ -448,6 +456,16 @@ class SettingsPage(QWidget):
         self.test_button.setEnabled(True)
         self.result_label.setText(self.format_report(report))
         self.status_message.emit("连接测试完成" if report.ok else "连接测试失败")
+
+    @Slot()
+    def _on_tools_capability(self) -> None:
+        """把「该档案是否支持 function calling」写进 capabilities（§3.5.5 约定 5）。"""
+        profile = self._service.profile(str(self.profile_combo.currentData()))
+        profile.capabilities.tools = bool(self.tools_capable_check.isChecked())
+        self._service.save()
+        self.status_message.emit(
+            "已记录工具能力：" + ("支持 function calling" if profile.capabilities.tools else "不支持（生成讲义时将不携带 tools）")
+        )
 
     @Slot(int)
     def _on_theme_changed(self, _index: int) -> None:

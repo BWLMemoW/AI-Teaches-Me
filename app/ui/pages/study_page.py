@@ -491,16 +491,13 @@ class StudyPage(QWidget):
         if self._services is None or self._lesson_dir is None:
             return None, None
         # 工具循环默认关闭（见生成偏好）：有些端点不支持 tools，带上就会被 422 拒绝
-        allow_tools = bool(getattr(self._services.config.generation, "allow_tools", False))
+        # 能力驱动（不猜模型世代）：档案声明支持 function calling 且总开关打开时才带 tools
+        generation_allows = bool(getattr(self._services.config.generation, "allow_tools", True))
         try:
-            model_name = self._services.config.require_profile().chat_model.lower()
+            profile_supports = bool(self._services.config.require_profile().capabilities.tools)
         except Exception:  # noqa: BLE001
-            model_name = ""
-        # deepseek-reasoner / R1 这类推理模型不支持 function calling；带了 tools 会被端点拒绝
-        if model_name.endswith("reasoner") or model_name.endswith("-r1") or "reasoner" in model_name:
-            self.status_message.emit("当前模型不支持工具调用，已自动以纯流式生成讲义")
-            allow_tools = False
-        if not allow_tools:
+            profile_supports = True
+        if not (generation_allows and profile_supports):
             return None, None
         client = getattr(self._services, "client", None)
         persona = self._current_persona()

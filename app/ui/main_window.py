@@ -109,7 +109,12 @@ class MainWindow(QMainWindow):
         self.qa_page.status_message.connect(lambda message: self.statusBar().showMessage(message, 10000))
         self.notes_page = NotesPage(courses_dir=result.layout.courses, pdf_printer=None)
         self.notes_page.status_message.connect(lambda message: self.statusBar().showMessage(message, 10000))
-        self.settings_page = SettingsPage(self._services.settings, thread_pool=self._pool)
+        self.settings_page = SettingsPage(
+            self._services.settings,
+            thread_pool=self._pool,
+            client=getattr(self._services, "client", None),
+            courses_dir=result.layout.courses,
+        )
         for page in (self.library_page, self.wizard_page, self.study_page, self.qa_page, self.notes_page, self.settings_page):
             self.stack.addWidget(page)
         layout.addWidget(self.stack, 1)
@@ -150,7 +155,10 @@ class MainWindow(QMainWindow):
         self.wizard_page.status_message.connect(lambda message: self.statusBar().showMessage(message, 8000))
 
         self.settings_page.theme_changed.connect(self._on_theme_changed)
-        self.settings_page.config_saved.connect(self.refresh_library)
+        self.settings_page.config_saved.connect(self._on_preferences_saved)
+        self.settings_page.backup_requested.connect(self._backup_library)
+        self.settings_page.restore_requested.connect(self._restore_backup)
+        self.settings_page.open_folder_requested.connect(self._open_folder)
         self.settings_page.status_message.connect(self.statusBar().showMessage)
 
         self.study_page.back_requested.connect(lambda: self.nav.setCurrentRow(self.NAV_COURSES))
@@ -250,6 +258,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"《{summary.name}》已{'标记完成' if completed else '取消完成'}（内容未改动）", 8000
         )
+
+    @Slot()
+    def _on_preferences_saved(self) -> None:
+        """偏好改动后立刻生效：主题/排版/人设/生成偏好。"""
+        self.apply_current_theme()
+        self.refresh_library()
+
+    @Slot(str)
+    def _open_folder(self, path: str) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     @Slot(object)
     def _open_icon_picker(self, summary: course_service.CourseSummary) -> None:

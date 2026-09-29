@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -99,6 +100,8 @@ class CourseCard(QFrame):
         self.style_tokens = style or CardStyle()
         self._progress = progress or {}
         self.setFixedWidth(self.CARD_WIDTH)
+        # 卡片高度贴合内容，不被网格行拉伸（否则中间会出现一大块空白）
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setObjectName("CourseCard")
@@ -132,7 +135,6 @@ class CourseCard(QFrame):
         self.badge_label.setStyleSheet(f"color: {self.style_tokens.primary}; font-size: 11px;")
         self.badge_label.setVisible(bool(badges))
         title_box.addWidget(self.badge_label)
-        title_box.addStretch(1)
         top.addLayout(title_box, 1)
         layout.addLayout(top)
 

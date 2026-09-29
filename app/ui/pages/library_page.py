@@ -92,9 +92,14 @@ class LibraryPage(QWidget):
         layout.addLayout(filters)
 
         tag_row = QHBoxLayout()
-        tag_row.addWidget(QLabel("标签"))
+        self.tag_label = QLabel("标签")
+        tag_row.addWidget(self.tag_label)
         self.tags_list = QListWidget()
-        self.tags_list.setFixedHeight(78)
+        # 紧凑的胶囊条：横向流动、自动换行、固定一行高度；没有标签时整行隐藏
+        self.tags_list.setFlow(QListView.Flow.LeftToRight)
+        self.tags_list.setWrapping(True)
+        self.tags_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.tags_list.setFixedHeight(34)
         self.tags_list.itemChanged.connect(lambda *_: self.apply_filters())
         tag_row.addWidget(self.tags_list, 1)
 
@@ -202,6 +207,8 @@ class LibraryPage(QWidget):
 
     def _reload_tags(self) -> None:
         if self._service is None:
+            self.tags_list.setVisible(False)
+            self.tag_label.setVisible(False)
             return
         self.tags_list.blockSignals(True)
         checked = {
@@ -218,6 +225,9 @@ class LibraryPage(QWidget):
             )
             self.tags_list.addItem(item)
         self.tags_list.blockSignals(False)
+        has_tags = self.tags_list.count() > 0
+        self.tags_list.setVisible(has_tags)
+        self.tag_label.setVisible(has_tags)
 
     def current_filter(self) -> LibraryFilter:
         selected_tags = tuple(

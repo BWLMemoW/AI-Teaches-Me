@@ -41,6 +41,10 @@ class SettingsService:
 
     # --- 读 -------------------------------------------------------------
     @property
+    def workspace_root(self) -> Path:
+        return self._workspace_root
+
+    @property
     def config(self) -> AppConfig:
         return self._config
 

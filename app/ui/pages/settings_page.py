@@ -26,6 +26,7 @@ from ...core.config import SEARCH_BACKENDS, LLMProfile
 from ...llm.client import ConnectionReport
 from ...services.settings_service import SettingsService
 from ..theme.presets import theme_choices
+from ..widgets.preference_panel import PreferencePanel
 
 
 class _ProbeSignals(QObject):
@@ -54,10 +55,16 @@ class SettingsPage(QWidget):
     """供应商档案 / 密钥 / 外观（主题、跟随系统、减少动效、字号）。"""
 
     theme_changed = Signal(str)
+    backup_requested = Signal()
+    restore_requested = Signal()
+    open_folder_requested = Signal(str)
     config_saved = Signal()
     status_message = Signal(str)
 
-    def __init__(self, service: SettingsService, *, thread_pool: QThreadPool | None = None, parent=None) -> None:
+    def __init__(
+        self, service: SettingsService, *, thread_pool: QThreadPool | None = None,
+        client=None, courses_dir=None, parent=None,
+    ) -> None:
         super().__init__(parent)
         self._service = service
         self._pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
@@ -68,6 +75,15 @@ class SettingsPage(QWidget):
         layout.addWidget(self._build_provider_group())
         layout.addWidget(self._build_appearance_group())
         layout.addWidget(self._build_search_group())
+        self.preference_panel = PreferencePanel(
+            service, client=client, courses_dir=courses_dir, thread_pool=self._pool
+        )
+        self.preference_panel.config_saved.connect(self.config_saved.emit)
+        self.preference_panel.status_message.connect(self.status_message.emit)
+        self.preference_panel.backup_requested.connect(self.backup_requested.emit)
+        self.preference_panel.restore_requested.connect(self.restore_requested.emit)
+        self.preference_panel.open_folder_requested.connect(self.open_folder_requested.emit)
+        layout.addWidget(self.preference_panel)
         layout.addWidget(self._build_result_group())
         layout.addStretch(1)
 

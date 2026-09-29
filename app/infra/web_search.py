@@ -106,7 +106,10 @@ class _HttpBackend:
         owns = self._client is None
         try:
             response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
+            if response.status_code >= 400:
+                # 把服务端返回体带出来，否则用户只看到 400 不知道该改什么
+                detail = (response.text or "").strip()[:300]
+                raise RuntimeError(f"HTTP {response.status_code}：{detail}")
             return response.json()
         finally:
             if owns:
@@ -124,12 +127,15 @@ class QianfanBackend(_HttpBackend):
         self.model = model
 
     async def search(self, query: str, k: int) -> list[SearchHit]:
+        # 千帆 /v2/ai_search 的必填字段是 search_source；带上未支持的 model 会被判 400（实测）
         payload = {
-            "model": self.model,
             "messages": [{"role": "user", "content": query}],
-            "stream": False,
+            "search_source": "baidu_search_v2",
             "resource_type_filter": ["web"],
+            "stream": False,
         }
+        if self.model:
+            payload["search_recency_filter"] = None  # 预留：按需开启时效过滤
         data = await self._post(
             self.url or "https://qianfan.baidubce.com/v2/ai_search",
             payload,

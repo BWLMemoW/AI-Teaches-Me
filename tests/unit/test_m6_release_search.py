@@ -99,7 +99,12 @@ def _search_service(tmp_path: Path, *, enabled: bool = True, budget: int = 2) ->
     config.searching_model.enabled = enabled
     config.searching_model.daily_call_budget = budget
     backend = _FakeBackend()
-    service = SearchService(cache_dir=tmp_path / "cache", searching_model=config.searching_model, backend=backend)
+    service = SearchService(
+        cache_dir=tmp_path / "cache",
+        searching_model=config.searching_model,
+        backend=backend,
+        api_key="test-search-key",  # 没有 Key 时会直接提示而未配置（M14 新增守卫）
+    )
     return service, backend
 
 

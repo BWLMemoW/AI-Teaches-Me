@@ -54,6 +54,7 @@ class OutlineDraft:
     icon: object | None = None
     icon_svg: str | None = None
     goal_type: str = "general"
+    goal_types: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     llm_profile: str | None = None
 
@@ -105,6 +106,7 @@ class OutlineService:
         icon: object | None = None,
         icon_svg: str | None = None,
         goal_type: str = "general",
+        goal_types: Sequence[str] = (),
         tags: Sequence[str] = (),
         llm_profile: str | None = None,
     ) -> OutlineDraft:
@@ -120,6 +122,7 @@ class OutlineService:
             icon=icon,
             icon_svg=icon_svg,
             goal_type=goal_type,
+            goal_types=[str(item) for item in goal_types],
             tags=[str(tag) for tag in tags],
             llm_profile=llm_profile,
         )
@@ -144,6 +147,7 @@ class OutlineService:
             material_summary=draft.material_summary,
             clarify_answers=draft.clarify_answers,
             goal_type=getattr(draft, "goal_type", "general"),
+            goal_types=list(getattr(draft, "goal_types", []) or []),
             cancel=cancel,
         )
         outline.course_id = draft.course_id
@@ -216,7 +220,10 @@ class OutlineService:
             persona=draft.persona,
             tags=list(draft.tags),
             llm_profile=draft.llm_profile,
-            profile=CourseProfile(goal_type=getattr(draft, "goal_type", "general")),
+            profile=CourseProfile(
+                goal_type=(getattr(draft, "goal_types", []) or [getattr(draft, "goal_type", "general")])[0],
+                goal_types=list(getattr(draft, "goal_types", []) or [getattr(draft, "goal_type", "general")]),
+            ),
             stats=CourseStats(
                 chapters=len(target_outline.chapters),
                 lessons=target_outline.total_lessons(),

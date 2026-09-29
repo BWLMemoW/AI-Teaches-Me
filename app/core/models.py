@@ -28,13 +28,23 @@ MASTERY_VALUES: tuple[int, ...] = (1, 2, 3)
 TRI_STATE: tuple[str, ...] = ("inherit", "on", "off")
 
 # 课程目标取向（M13 新增：影响大纲结构与讲解侧重）
-GOAL_TYPES: tuple[str, ...] = ("general", "exam", "crash", "interest", "deep_dive")
+GOAL_TYPES: tuple[str, ...] = (
+    "general", "exam", "crash", "interest", "deep_dive",
+    "review", "practice", "career", "research", "beginner", "advanced", "project",
+)
 GOAL_LABELS: dict[str, str] = {
     "general": "通用",
     "exam": "应试",
     "crash": "速成",
     "interest": "兴趣",
     "deep_dive": "精讲",
+    "review": "复习巩固",
+    "practice": "刷题实战",
+    "career": "求职面试",
+    "research": "学术研究",
+    "beginner": "零基础",
+    "advanced": "进阶提升",
+    "project": "项目实战",
 }
 
 Depth = Literal["minimal", "standard", "deep"]
@@ -153,7 +163,8 @@ class LearningToggles(Base):
 class CourseProfile(Base):
     target_audience: str = ""
     goal: str = ""
-    goal_type: str = "general"  # 通用 / 应试 / 速成 / 兴趣 / 精讲
+    goal_type: str = "general"  # 主目标（= goal_types 的第一个，兼容旧字段）
+    goal_types: list[str] = Field(default_factory=lambda: ["general"])  # 可多选
     depth: Depth = "standard"
     weekly_minutes: int = 120
 

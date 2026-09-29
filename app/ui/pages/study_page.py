@@ -620,7 +620,13 @@ class StudyPage(QWidget):
         if self._course_dir is not None:
             self.lesson_tree.refresh_marks(self._course_dir)
         self.lesson_completed.emit(str((self._context.get("lesson") or {}).get("id") or ""))
-        self.status_message.emit("已标记完成（进度与复习队列已更新）")
+        # 学完就往下走：自动选中并打开下一节（没有下一节则提示整门课完成）
+        nxt = self.lesson_tree.next_lesson()
+        if nxt is not None:
+            self.status_message.emit("已标记完成 → 自动进入下一节")
+            self.load_lesson(nxt)
+        else:
+            self.status_message.emit("已标记完成 · 这门课的小节都学完了，可以去笔记中心生成笔记或导出啦")
 
     def _on_toggle_favorite(self) -> None:
         if self._lesson_dir is None:

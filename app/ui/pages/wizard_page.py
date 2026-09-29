@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal, S
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QScrollArea,
     QToolButton,
     QButtonGroup,
     QListWidget,
@@ -151,7 +152,17 @@ class WizardPage(QWidget):
     # --- 四个步骤 -------------------------------------------------------
     def _build_basic_step(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
         layout.addWidget(QLabel("第一步：课程名（必填），你自己的大纲可选，写得越具体，AI 细化得越准。"))
 
         self.name_edit = QLineEdit()
@@ -160,6 +171,7 @@ class WizardPage(QWidget):
         layout.addWidget(self.name_edit)
 
         self.user_outline_edit = QPlainTextEdit()
+        self.user_outline_edit.setMinimumHeight(150)  # 别被布局压成一行
         self.user_outline_edit.setPlaceholderText("（选填）例如：\nC1 矩阵与线性方程组\n  L1-1 矩阵到底是什么\n  L1-2 矩阵乘法")
         layout.addWidget(QLabel("我的大纲（选填）"))
         layout.addWidget(self.user_outline_edit, 1)
@@ -183,7 +195,7 @@ class WizardPage(QWidget):
         goal_row = QHBoxLayout()
         goal_row.setSpacing(6)
         self.goal_group = QButtonGroup(self)
-        self.goal_group.setExclusive(True)
+        self.goal_group.setExclusive(False)  # 允许多选：应试 + 求职 + 项目实战 这类组合很常见
         self.goal_buttons: dict[str, QToolButton] = {}
         for value, label in GOAL_LABELS.items():
             button = QToolButton()
@@ -362,12 +374,14 @@ class WizardPage(QWidget):
             f"已解析 {parsed} 份资料" + (f"，{failed} 份失败" if failed else "") + "；生成大纲时会被引用。"
         )
 
+    def _current_goals(self) -> list[str]:
+        """当前选中的课程目标（可多选；一个都没选时回落到通用）。"""
+        chosen = [value for value, button in getattr(self, "goal_buttons", {}).items() if button.isChecked()]
+        return chosen or ["general"]
+
     def _current_goal(self) -> str:
-        """当前选中的课程目标（默认 general）。"""
-        for value, button in getattr(self, "goal_buttons", {}).items():
-            if button.isChecked():
-                return value
-        return "general"
+        """主目标（= 第一个选中的项），兼容单值字段。"""
+        return self._current_goals()[0]
     # --- 图标 -----------------------------------------------------------
     def _current_icon(self) -> CourseIcon:
         preset_id = self.icon_grid.selected_id() or "general"
@@ -475,6 +489,7 @@ class WizardPage(QWidget):
             icon=self._current_icon(),
             icon_svg=self._icon_svg,
             goal_type=self._current_goal(),
+            goal_types=self._current_goals(),
             tags=tags,
         )
         if self._draft.name != name:

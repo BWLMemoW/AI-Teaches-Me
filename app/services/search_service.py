@@ -91,6 +91,14 @@ class SearchService:
         return {"date": data["date"], "used": int(data["used"]), "limit": limit, "remaining": max(0, limit - int(data["used"]))}
 
     def _consume_budget(self, calls: int = 1) -> None:
+        needs_key = str(getattr(self.model_config, "backend", "")) != "searxng"
+        if needs_key and not self.api_key:
+            return SearchResult(
+                query=text,
+                message="未配置搜索 API Key：请到 设置 → 联网与时效 填写搜索密钥",
+                stopped=True,
+            )
+
         state = self.budget_state()
         file_repository.write_json(
             self.budget_file, {"date": state["date"], "used": state["used"] + calls}
@@ -137,6 +145,14 @@ class SearchService:
         cached = self._read_cache(text, size)
         if cached is not None:
             return SearchResult(query=text, hits=cached, cached=True, backend=getattr(self._backend, "name", ""))
+
+        needs_key = str(getattr(self.model_config, "backend", "")) != "searxng"
+        if needs_key and not self.api_key:
+            return SearchResult(
+                query=text,
+                message="未配置搜索 API Key：请到 设置 → 联网与时效 填写搜索密钥",
+                stopped=True,
+            )
 
         state = self.budget_state()
         if state["remaining"] <= 0:

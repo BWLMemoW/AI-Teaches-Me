@@ -22,9 +22,23 @@ GOAL_HINTS: dict[str, str] = {
     "crash": "速成：只保留最短可用路径（3-5 小时可学完）；砍掉历史沿革与繁杂推导；每节给最小可懂例子；标注可后续深入的扩展点。",
     "interest": "兴趣：故事与生活例子优先；少公式多直觉；允许留白与悬念。",
     "deep_dive": "精讲：推导完整、边界条件与反例齐全；与相邻知识建立联系；每节给延伸阅读与思考题。",
+    "review": "复习巩固：先给知识地图与速查表，再按遗忘曲线安排回顾；每节提示「上次学到哪」与易错点复现。",
+    "practice": "刷题实战：以题组驱动，先给判别条件与套路，再给变式与常见坑；每题标注考查的知识点。",
+    "career": "求职面试：围绕高频面试题与项目讲述组织；给「怎么讲给面试官听」的话术框架与追问准备。",
+    "research": "学术研究：给定义与符号体系、证明思路、相关工作与论文导读；强调适用范围与未解决问题。",
+    "beginner": "零基础：先补前置概念，术语第一次出现就解释；多用生活类比；每步都给可自检的小练习。",
+    "advanced": "进阶提升：跳过基础铺垫，直接给深层原理、性能/数值细节与工程取舍；配更高难度的思考题。",
+    "project": "项目实战：以可运行的最小项目为主线，边做边讲；给排错清单、验收标准与扩展方向。",
 }
 MIN_LESSONS_PER_CHAPTER = 2
 
+
+def goal_prompt_line(goal_type: str = "general", goal_types: Sequence[str] | None = None) -> str:
+    """把（可多选的）课程目标拼成提示词里的一行。"""
+    chosen = [item for item in (goal_types or []) if item] or ([goal_type] if goal_type else ["general"])
+    labels = "、".join(GOAL_LABELS.get(item, item) for item in chosen)
+    hints = " ".join(GOAL_HINTS.get(item, "") for item in chosen if item in GOAL_HINTS)
+    return f"课程目标：{labels}｜{hints}"
 
 class DirectorAgent(AgentBase):
     name = "director"
@@ -76,14 +90,15 @@ class DirectorAgent(AgentBase):
         material_summary: str = "",
         clarify_answers: str = "",
         goal_type: str = "general",
+        goal_types: Sequence[str] | None = None,
     ) -> str:
         return (
             f"课程名：{course_name}\n"
             f"用户提供的大纲（可能为空）：{user_outline or '（无）'}\n"
             f"资料摘要（可能为空）：{material_summary or '（无）'}\n"
             f"澄清回答（可能为空）：{clarify_answers or '（用户选择跳过）'}\n\n"
-            f"课程目标：{GOAL_LABELS.get(goal_type, '通用')}｜{GOAL_HINTS.get(goal_type, GOAL_HINTS['general'])}\n\n"
-            "请按输出协议给出完整教学大纲 JSON。"
+            + goal_prompt_line(goal_type, goal_types) + "\n\n"
+            + "请按输出协议给出完整教学大纲 JSON。"
         )
 
     @staticmethod
@@ -107,6 +122,7 @@ class DirectorAgent(AgentBase):
         material_summary: str = "",
         clarify_answers: str = "",
         goal_type: str = "general",
+        goal_types: Sequence[str] | None = None,
         cancel: Any = None,
     ) -> CourseOutline:
         messages: list[Mapping[str, Any]] = [
@@ -117,6 +133,7 @@ class DirectorAgent(AgentBase):
                     user_outline=user_outline,
                     material_summary=material_summary,
                     clarify_answers=clarify_answers,
+                    goal_types=goal_types,
                 ),
             }
         ]

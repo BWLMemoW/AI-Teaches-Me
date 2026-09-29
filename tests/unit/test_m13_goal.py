@@ -28,7 +28,8 @@ class _FakeClient:
 
 
 def test_goal_types_cover_requested_options() -> None:
-    assert GOAL_TYPES == ("general", "exam", "crash", "interest", "deep_dive")
+    assert GOAL_TYPES[:5] == ("general", "exam", "crash", "interest", "deep_dive")
+    assert {"review", "practice", "career", "research", "beginner", "advanced", "project"} <= set(GOAL_TYPES)
     assert GOAL_LABELS["exam"] == "应试"
     assert GOAL_LABELS["crash"] == "速成"
     assert GOAL_LABELS["interest"] == "兴趣"
@@ -49,6 +50,8 @@ def test_wizard_goal_selector_defaults_and_switches(qtbot, tmp_path: Path) -> No
     assert page.goal_buttons["general"].isChecked() is True
 
     page.goal_buttons["exam"].setChecked(True)
+    assert set(page._current_goals()) == {"general", "exam"}  # 允许多选
+    page.goal_buttons["general"].setChecked(False)
     assert page._current_goal() == "exam"
 
 
@@ -81,12 +84,14 @@ def test_wizard_passes_goal_into_draft(qtbot, tmp_path: Path) -> None:
     page = WizardPage(OutlineService(courses_dir=courses, client=_FakeClient()))
     qtbot.addWidget(page)
     page.name_edit.setText("兴趣向课程")
+    page.goal_buttons["general"].setChecked(False)
     page.goal_buttons["interest"].setChecked(True)
 
     page._on_basic_next()
 
     assert page._draft is not None
     assert page._draft.goal_type == "interest"
+    assert page._draft.goal_types == ["interest"]
 
 
 def test_wizard_ai_icon_uses_workspace_cache_dir() -> None:

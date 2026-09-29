@@ -87,3 +87,16 @@ def test_wizard_passes_goal_into_draft(qtbot, tmp_path: Path) -> None:
 
     assert page._draft is not None
     assert page._draft.goal_type == "interest"
+
+
+def test_wizard_ai_icon_uses_workspace_cache_dir() -> None:
+    """回归：向导草稿阶段的 AI 图标必须写进工作区缓存目录，绝不能写到当前工作目录。
+
+    （曾发生：使用 Path(".") 导致仓库根出现 assets/icon.svg。）
+    """
+    source = (Path("app/ui/pages/wizard_page.py")).read_text(encoding="utf-8")
+
+    assert "draft_icon" in source
+    assert 'generate_with_ai(' in source
+    compact = source.replace(" ", "").replace("\n", "")
+    assert 'generate_with_ai(Path(".")' not in compact

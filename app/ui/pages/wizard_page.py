@@ -434,13 +434,17 @@ class WizardPage(QWidget):
         self.ai_icon_button.setEnabled(False)
         self.icon_hint.setText("正在生成图标…")
 
+        # 草稿阶段还没有课程目录：图标写到工作区缓存目录，绝不能用 "."（会污染当前工作目录）
+        workspace = Path(self._service.courses_dir).parent
+        draft_dir = workspace / "data" / "cache" / "draft_icon"
+
         def factory():
             from ...services.icon_service import IconService
 
             service = IconService(client=client)
             return asyncio.run(
                 service.generate_with_ai(
-                    Path("."), concept=name, color=self._icon_color, bg=self._icon_bg
+                    draft_dir, concept=name, color=self._icon_color, bg=self._icon_bg
                 )
             )
 

@@ -104,6 +104,17 @@ class WebEngineRenderer:
     def render_blocks(self, blocks: list[dict]) -> None:
         self._run(f"window.ATM.renderBlocks({json.dumps(list(blocks), ensure_ascii=False)});")
 
+    def stream_start(self) -> None:
+        """开始一段实时预览（打字机，M21）。"""
+        self._run("window.ATM.streamStart();")
+
+    def stream_update(self, text: str) -> None:
+        """原地更新实时预览文本（不重建 DOM）。"""
+        self._run(f"window.ATM.streamUpdate({json.dumps(text, ensure_ascii=False)});")
+
+    def stream_end(self) -> None:
+        """结束实时预览（正式块接手）。"""
+        self._run("window.ATM.streamEnd();")
     def append_block(self, block: dict) -> None:
         """流式追加：单个内容块到达即渲染（M20：边生成边输出）。"""
         payload = json.dumps(dict(block), ensure_ascii=False)
@@ -119,6 +130,7 @@ class WebEngineRenderer:
 class _Signals(QObject):
     chunk = Signal(str)
     block = Signal(object)
+    partial = Signal(str)
     done = Signal(object)
     failed = Signal(str)
 
@@ -183,6 +195,7 @@ class StudyPage(QWidget):
         self._signals = _Signals()
         self._signals.chunk.connect(self._on_chunk)
         self._signals.block.connect(self._on_block_ready)
+        self._signals.partial.connect(self._on_partial)
         self._signals.done.connect(self._on_done)
         self._signals.failed.connect(self._on_failed)
         self._token = CancellationToken()
@@ -453,6 +466,7 @@ class StudyPage(QWidget):
                 course_id=str((context.get("course") or {}).get("id") or ""),
                 revision_reason=revision_reason,
                 on_block=lambda block: self._signals.block.emit(block),
+                on_partial=lambda text: self._signals.partial.emit(text),
             )
 
         self._mode = "generate"
@@ -622,11 +636,20 @@ class StudyPage(QWidget):
         self._token.cancel()
         self.status_message.emit("已请求停止（已生成内容保留）")
 
+    @Slot(str)
+    def _on_partial(self, text: str) -> None:
+        """逐字预览：正在生成的这一行里已经出现的文字，立即上屏（M21）。"""
+        updater = getattr(self._renderer, "stream_update", None)
+        if callable(updater):
+            updater(text)
     @Slot(object)
     def _on_block_ready(self, block: object) -> None:
         """工作线程解析出一个内容块 → 主线程立刻追加渲染（M20 流式体验）。"""
         if not isinstance(block, dict):
             return
+        ender = getattr(self._renderer, "stream_end", None)
+        if callable(ender):
+            ender()
         appender = getattr(self._renderer, "append_block", None)
         if callable(appender):
             appender(block)

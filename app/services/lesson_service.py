@@ -299,6 +299,7 @@ async def generate_script(
     revision_reason: str = "",
     coverage_rounds: int = 1,
     on_block: Callable[[dict], None] | None = None,
+    on_partial: Callable[[str], None] | None = None,
 ) -> GenerationOutcome:
     """生成讲义：流式解析 → 逐块落盘 → 覆盖率自检（必要时补全一轮）→ 版本自增。"""
     from ..agents.teacher import TeacherAgent
@@ -325,6 +326,10 @@ async def generate_script(
             lesson_id=lesson_id,
             course_id=course_id,
         ):
+            if on_partial is not None:
+                partial = parser.partial_text()
+                if partial:
+                    on_partial(partial)
             for block in parser.feed(piece):
                 blocks.append(block)
                 append_block(directory, block)

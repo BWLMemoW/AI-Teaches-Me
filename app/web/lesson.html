@@ -26,7 +26,9 @@
     }
     #atm-root { max-width: var(--atm-reading-width, 820px); margin: 0 auto; padding: 24px 20px 48px; }
     .atm-meta { color: var(--atm-text-muted); font-size: 12px; margin-bottom: 8px; }
-    .atm-block { margin: 0 0 16px; content-visibility: auto; contain-intrinsic-size: 320px; }
+    /* 逐字预览的光标（M21） */
+    .atm-live::after { content: "▍"; color: var(--atm-primary); animation: atm-blink 1s steps(1) infinite; }
+    @keyframes atm-blink { 50% { opacity: 0; } }    .atm-block { margin: 0 0 16px; content-visibility: auto; contain-intrinsic-size: 320px; }
     [data-mode="dark"] .atm-image { filter: brightness(0.85) contrast(1.05); }
     .atm-image { cursor: zoom-in; max-width: 100%; height: auto; }
     .atm-lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); display: flex; align-items: center; justify-content: center; z-index: 50; cursor: zoom-out; }

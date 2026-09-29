@@ -570,9 +570,38 @@
     return getState();
   }
 
+  /* --- 逐字实时预览（M21）：正在生成的那一行，边到达边显示 --- */
+  var liveNode = null;
+
+  function streamStart() {
+    streamEnd();
+    if (!state.root) { return false; }
+    liveNode = el("section", "atm-block atm-text atm-live");
+    state.root.appendChild(liveNode);
+    return true;
+  }
+
+  function streamUpdate(markdown) {
+    if (!liveNode) { streamStart(); }
+    if (!liveNode) { return false; }
+    liveNode.innerHTML = renderRich(markdown || "");
+    if (state.root && state.root.scrollHeight - state.root.scrollTop - state.root.clientHeight < 260) {
+      state.root.scrollTop = state.root.scrollHeight;
+    }
+    return true;
+  }
+
+  function streamEnd() {
+    if (liveNode) { liveNode.remove(); }
+    liveNode = null;
+    return true;
+  }
   window.ATM = {
     init: init,
     appendBlock: appendBlock,
+    streamStart: streamStart,
+    streamUpdate: streamUpdate,
+    streamEnd: streamEnd,
     appendBlocks: appendBlocks,
     renderBlocks: renderBlocks,
     reset: reset,

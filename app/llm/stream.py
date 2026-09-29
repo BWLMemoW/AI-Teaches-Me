@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Iterator
 from typing import Any
 
@@ -87,6 +88,36 @@ class BlockStreamParser:
                 emitted.append(block)
         return emitted
 
+    def partial_text(self) -> str | None:
+        """当前「还没收完」那一行里已经出现的文本（逐字预览用）。
+
+        NDJSON 下一行 JSON 收完才算一个块，但模型是一个字一个字吐的；
+        这里把 ``md`` / ``question`` / ``quote`` 字段里**已经到达**的部分取出来，
+        交给渲染层做打字机预览，等整行收完再替换为正式块。
+        """
+        buffered = self._buffer.lstrip()
+        if not buffered.startswith("{"):
+            return None
+        match = re.search(r'"(?:md|question|quote)"\s*:\s*"', buffered)
+        if match is None:
+            return None
+        index = match.end()
+        out: list[str] = []
+        escaped = False
+        while index < len(buffered):
+            char = buffered[index]
+            if escaped:
+                out.append({"n": "\n", "t": "\t", '"': '"', "\\": "\\"}.get(char, char))
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                break
+            else:
+                out.append(char)
+            index += 1
+        text = "".join(out)
+        return text or None
     def fallback_markdown(self) -> str:
         """协议错乱时的整段回退文本。"""
         return self.raw_text

@@ -224,8 +224,9 @@ def test_wizard_icon_picker_lists_presets(qtbot, tmp_path: Path) -> None:
     page = WizardPage(service)
     qtbot.addWidget(page)
 
-    assert page.icon_list.count() == len(preset_choices())
-    page.icon_list.setCurrentRow(3)
+    assert len(page.icon_grid.ids()) == len(preset_choices())
+    assert page.icon_grid.rows() >= 2  # 固定列数网格，永不裁切
+    page.icon_grid.select(page.icon_grid.ids()[3])
     icon = page._current_icon()
     assert icon.kind == "preset" and icon.value in preset_ids()
     assert page.icon_preview.pixmap() is not None

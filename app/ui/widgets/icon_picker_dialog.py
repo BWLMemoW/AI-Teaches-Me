@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from ...core.models import CourseIcon
 from ...services.icon_service import IconService, preset_choices, tint_svg
 from ..icon_render import course_icon_pixmap, svg_to_pixmap
+from .icon_grid import IconGrid
 
 
 class _Signals(QObject):
@@ -79,15 +80,10 @@ class IconPickerDialog(QDialog):
         self.resize(560, 420)
         layout = QVBoxLayout(self)
 
-        self.icon_list = QListWidget()
-        self.icon_list.setViewMode(QListView.ViewMode.IconMode)
-        self.icon_list.setIconSize(QSize(48, 48))
-        self.icon_list.setGridSize(QSize(76, 84))
-        self.icon_list.setMovement(QListView.Movement.Static)
-        self.icon_list.setWrapping(True)
-        self.icon_list.setResizeMode(QListView.ResizeMode.Adjust)
-        self.icon_list.currentRowChanged.connect(lambda *_: self._refresh_preview())
-        layout.addWidget(self.icon_list, 1)
+        self.icon_grid = IconGrid(columns=6)
+        self.icon_grid.setMinimumHeight(self.icon_grid.height_hint())
+        self.icon_grid.selected_changed.connect(lambda *_: self._refresh_preview())
+        layout.addWidget(self.icon_grid, 1)
 
         row = QHBoxLayout()
         self.preview = QLabel()
@@ -122,27 +118,14 @@ class IconPickerDialog(QDialog):
 
     # --- 列表与预览 -----------------------------------------------------
     def _rebuild_list(self, *, base_value: str | None = None) -> None:
-        self.icon_list.blockSignals(True)
-        self.icon_list.clear()
-        for preset_id, label in preset_choices():
-            icon = CourseIcon(kind="preset", value=preset_id, color=self._color, bg=self._bg)
-            item = QListWidgetItem(course_icon_pixmap(Path("."), icon, size=64), label)
-            item.setData(Qt.ItemDataRole.UserRole, preset_id)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
-            self.icon_list.addItem(item)
-        self.icon_list.blockSignals(False)
-        target = base_value or "general"
-        for row in range(self.icon_list.count()):
-            if self.icon_list.item(row).data(Qt.ItemDataRole.UserRole) == target:
-                self.icon_list.setCurrentRow(row)
-                break
-        else:
-            self.icon_list.setCurrentRow(0)
+        self.icon_grid.set_icons(
+            preset_choices(), color=self._color, bg=self._bg, current=base_value or "general"
+        )
+        self.icon_grid.setMinimumHeight(self.icon_grid.height_hint())
         self._refresh_preview()
 
     def _current_icon(self) -> CourseIcon:
-        item = self.icon_list.currentItem()
-        value = str(item.data(Qt.ItemDataRole.UserRole)) if item is not None else "general"
+        value = self.icon_grid.selected_id() or "general"
         return CourseIcon(kind="preset", value=value, color=self._color, bg=self._bg)
 
     def _refresh_preview(self) -> None:

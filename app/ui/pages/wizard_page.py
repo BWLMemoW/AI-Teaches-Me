@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from ...core.cancel import CancellationToken
 from ...core.models import CourseIcon, CourseOutline
 from ...services.outline_service import CreateResult, OutlineDraft, OutlineService
+from ..widgets.icon_grid import IconGrid
 from ..widgets.outline_tree import OutlineTreeWidget
 
 
@@ -175,16 +176,10 @@ class WizardPage(QWidget):
         layout.addWidget(self.material_label)
 
         layout.addWidget(QLabel("课程图标（选预设 / 换颜色 / 或让 AI 生成）"))
-        self.icon_list = QListWidget()
-        self.icon_list.setViewMode(QListView.ViewMode.IconMode)
-        self.icon_list.setIconSize(QSize(48, 48))
-        self.icon_list.setGridSize(QSize(72, 80))
-        self.icon_list.setMovement(QListView.Movement.Static)
-        self.icon_list.setWrapping(True)
-        self.icon_list.setResizeMode(QListView.ResizeMode.Adjust)
-        self.icon_list.setFixedHeight(172)
-        self.icon_list.currentRowChanged.connect(lambda *_: self._refresh_icon_preview())
-        layout.addWidget(self.icon_list)
+        self.icon_grid = IconGrid(columns=6)
+        self.icon_grid.setMinimumHeight(self.icon_grid.height_hint())
+        self.icon_grid.selected_changed.connect(lambda *_: self._refresh_icon_preview())
+        layout.addWidget(self.icon_grid)
 
         icon_row = QHBoxLayout()
         self.icon_preview = QLabel()
@@ -343,25 +338,21 @@ class WizardPage(QWidget):
 
     # --- 图标 -----------------------------------------------------------
     def _current_icon(self) -> CourseIcon:
-        item = self.icon_list.currentItem()
-        preset_id = str(item.data(Qt.ItemDataRole.UserRole)) if item is not None else "general"
+        preset_id = self.icon_grid.selected_id() or "general"
         return CourseIcon(kind="preset", value=preset_id, color=self._icon_color, bg=self._icon_bg)
 
     def _rebuild_icon_list(self) -> None:
+        """重建图标网格（固定列数，永不裁切）。"""
         from ...services import icon_service
-        from ..icon_render import course_icon_pixmap
 
-        self.icon_list.blockSignals(True)
-        self.icon_list.clear()
-        for preset_id, label in icon_service.preset_choices():
-            icon = CourseIcon(kind="preset", value=preset_id, color=self._icon_color, bg=self._icon_bg)
-            item = QListWidgetItem(course_icon_pixmap(Path("."), icon, size=64), label)
-            item.setData(Qt.ItemDataRole.UserRole, preset_id)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
-            self.icon_list.addItem(item)
-        self.icon_list.blockSignals(False)
-        if self.icon_list.count():
-            self.icon_list.setCurrentRow(0)
+        current = self.icon_grid.selected_id() or "general"
+        self.icon_grid.set_icons(
+            icon_service.preset_choices(),
+            color=self._icon_color,
+            bg=self._icon_bg,
+            current=current,
+        )
+        self.icon_grid.setMinimumHeight(self.icon_grid.height_hint())
         self._refresh_icon_preview()
 
     def _refresh_icon_preview(self) -> None:

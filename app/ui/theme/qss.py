@@ -284,6 +284,18 @@ QSplitter::handle {{ background-color: {c.border}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 QToolTip {{ background-color: {c.surface}; color: {c.text}; border: 1px solid {c.border}; padding: 4px 6px; }}
 QCheckBox, QRadioButton {{ spacing: 7px; }}
+
+/* 图标选择网格：选中态用主色描边 + 主色浅底 */
+QToolButton {{
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 6px 4px;
+  color: {c.text_dim};
+  background-color: transparent;
+  font-size: {small}px;
+}}
+QToolButton:hover {{ background-color: {c.surface_alt}; border-color: {c.border}; color: {c.text}; }}
+QToolButton:checked {{ background-color: {tint(0.12)}; border-color: {c.primary}; color: {c.primary}; font-weight: 600; }}
 /* 阅读区宽度（§11.1：正文阅读宽度可调，默认 {width}px） */
 QTextBrowser[role="reading"], QWidget[role="reading"] {{ max-width: {width}px; }}
 """

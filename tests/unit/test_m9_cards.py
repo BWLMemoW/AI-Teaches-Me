@@ -133,8 +133,9 @@ def test_icon_picker_applies_preset(qtbot, tmp_path: Path) -> None:
     dialog = IconPickerDialog(course_dir=course, course_name="ATM 使用指南")
     qtbot.addWidget(dialog)
 
-    assert dialog.icon_list.count() >= 12
-    dialog.icon_list.setCurrentRow(2)
+    assert len(dialog.icon_grid.ids()) >= 12
+    assert dialog.icon_grid.rows() >= 2
+    dialog.icon_grid.select(dialog.icon_grid.ids()[2])
     # 不点击取色器按钮：QColorDialog.getColor 是模态的，自动化里会一直阻塞
     assert dialog.color_button.text() == "主色…"
 

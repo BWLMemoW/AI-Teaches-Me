@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
-from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal, Slot
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -35,6 +36,42 @@ from ...services.outline_service import CreateResult, OutlineDraft, OutlineServi
 from ..widgets.icon_grid import IconGrid
 from ..widgets.outline_tree import OutlineTreeWidget
 
+
+_QUESTION_LINE = re.compile(r"^\s*(?:(\d+)\s*[.、)．]\s*|[-*•·]\s+)(.*)$")
+
+
+def parse_clarify_questions(text: str) -> tuple[str, list[str], str]:
+    """把澄清阶段的模型输出拆成（前言、问题列表、补充说明）。
+
+    约定：编号行（``1.`` / ``1、`` / ``-``）是问题；紧跟其后的非空行算这条问题的续行；
+    空行结束一条问题，之后的非编号文本（例如「补充说明：…」）算补充说明。
+    """
+    intro: list[str] = []
+    questions: list[str] = []
+    trailer: list[str] = []
+    open_index: int | None = None
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            open_index = None
+            (trailer if questions else intro).append("")
+            continue
+        match = _QUESTION_LINE.match(line)
+        if match:
+            body = (match.group(2) or "").strip()
+            if body:
+                questions.append(body)
+                open_index = len(questions) - 1
+            continue
+        if questions:
+            if open_index is not None:
+                questions[open_index] = f"{questions[open_index]} {line}".strip()
+            else:
+                trailer.append(line)
+            continue
+        intro.append(line)
+        open_index = -1
+    return "\n".join(intro).strip(), [item for item in questions if item], "\n".join(trailer).strip()
 
 class _Signals(QObject):
     chunk = Signal(str)
@@ -255,15 +292,40 @@ class WizardPage(QWidget):
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel("第二步：AI 先问几个关键问题（最多 5 个）。不想回答就直接生成。"))
 
+        # 原始流式文本先收进这个隐藏缓冲区：既当解析源，也保证内容不丢
         self.clarify_output = QPlainTextEdit()
         self.clarify_output.setReadOnly(True)
-        self.clarify_output.setPlaceholderText("澄清问题会逐字出现…")
-        layout.addWidget(self.clarify_output, 1)
+        self.clarify_output.hide()
+        layout.addWidget(self.clarify_output)
 
-        self.clarify_answers_edit = QPlainTextEdit()
-        self.clarify_answers_edit.setPlaceholderText("你的回答（选填），可以只回答关心的那几条")
-        layout.addWidget(QLabel("我的回答"))
-        layout.addWidget(self.clarify_answers_edit, 1)
+        # 一问一答列表（可上下滚动）：【问题 Label】【答案输入框】…
+        self.clarify_scroll = QScrollArea()
+        self.clarify_scroll.setWidgetResizable(True)
+        self.clarify_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        holder = QWidget()
+        self.clarify_qa_layout = QVBoxLayout(holder)
+        self.clarify_qa_layout.setContentsMargins(2, 2, 12, 2)
+        self.clarify_qa_layout.setSpacing(8)
+        self.clarify_scroll.setWidget(holder)
+
+        self.clarify_intro_label = QLabel("AI 正在提问…")
+        self.clarify_intro_label.setWordWrap(True)
+        self.clarify_intro_label.setProperty("role", "muted")
+        self.clarify_trailer_label = QLabel("")
+        self.clarify_trailer_label.setWordWrap(True)
+        self.clarify_trailer_label.setProperty("role", "muted")
+        self.clarify_qa_layout.addWidget(self.clarify_intro_label)
+        self.clarify_qa_layout.addWidget(self.clarify_trailer_label)
+        self.clarify_qa_layout.addStretch(1)
+        layout.addWidget(self.clarify_scroll, 1)
+
+        self.clarify_question_labels: list[QLabel] = []
+        self.clarify_answer_edits: list[QPlainTextEdit] = []
+        self._clarify_streaming = False
+        self._clarify_timer = QTimer(self)
+        self._clarify_timer.setSingleShot(True)
+        self._clarify_timer.setInterval(120)
+        self._clarify_timer.timeout.connect(self._render_clarify_questions)
 
         row = QHBoxLayout()
         self.clarify_back_button = QPushButton("上一步")
@@ -279,6 +341,85 @@ class WizardPage(QWidget):
         row.addWidget(self.clarify_skip_button)
         layout.addLayout(row)
         return page
+
+    # --- 第二步：一问一答列表 -------------------------------------------
+    def _render_clarify_questions(self) -> None:
+        """按当前流式文本重建「问题 + 输入框」列表（保留已输入的回答）。"""
+        raw = self.clarify_output.toPlainText()
+        intro, questions, trailer = parse_clarify_questions(raw)
+        previous = self._collect_clarify_answers()
+        focus_index = next(
+            (index for index, edit in enumerate(self.clarify_answer_edits) if edit.hasFocus()), None
+        )
+
+        while self.clarify_qa_layout.count() > 1:  # 保留 intro 标签，其余重建
+            item = self.clarify_qa_layout.takeAt(1)
+            widget = item.widget()
+            if widget is not None and widget not in (self.clarify_trailer_label, self.clarify_intro_label):
+                widget.deleteLater()
+        self.clarify_question_labels = []
+        self.clarify_answer_edits = []
+
+        if not raw.strip():
+            self.clarify_intro_label.setText(
+                "AI 正在提问…" if self._clarify_streaming else "还没有问题。点「重新提问」让 AI 先问几个关键问题。"
+            )
+        elif questions:
+            if intro:
+                self.clarify_intro_label.setText(intro)
+            else:
+                self.clarify_intro_label.setText(f"AI 想先确认 {len(questions)} 件事：")
+            for index, question in enumerate(questions, start=1):
+                label = QLabel(f"问题 {index}：{question}")
+                label.setWordWrap(True)
+                label.setProperty("role", "subtitle")
+                edit = QPlainTextEdit()
+                edit.setPlaceholderText("输入你的回答（留空就是跳过这条）")
+                edit.setFixedHeight(58)
+                if index - 1 < len(previous) and previous[index - 1].strip():
+                    edit.setPlainText(previous[index - 1])
+                self.clarify_qa_layout.addWidget(label)
+                self.clarify_qa_layout.addWidget(edit)
+                self.clarify_question_labels.append(label)
+                self.clarify_answer_edits.append(edit)
+        else:
+            # 模型没按编号提问：原文照旧展示，只留一个自由回答框，别把功能弄丢
+            self.clarify_intro_label.setText(raw.strip())
+            label = QLabel("你的回答（选填）")
+            label.setWordWrap(True)
+            label.setProperty("role", "subtitle")
+            edit = QPlainTextEdit()
+            edit.setPlaceholderText("可以只回答关心的那几条")
+            edit.setFixedHeight(58)
+            if previous:
+                edit.setPlainText(previous[0])
+            self.clarify_qa_layout.addWidget(label)
+            self.clarify_qa_layout.addWidget(edit)
+            self.clarify_question_labels.append(label)
+            self.clarify_answer_edits.append(edit)
+
+        self.clarify_trailer_label.setText(trailer)
+        self.clarify_trailer_label.setVisible(bool(trailer))
+        self.clarify_qa_layout.addWidget(self.clarify_trailer_label)
+        self.clarify_qa_layout.addStretch(1)
+        if focus_index is not None and focus_index < len(self.clarify_answer_edits):
+            self.clarify_answer_edits[focus_index].setFocus()
+
+    def _collect_clarify_answers(self) -> list[str]:
+        return [edit.toPlainText() for edit in self.clarify_answer_edits]
+
+    def _clarify_answers_markdown(self) -> str:
+        """把逐条回答整理成给模型看的文本（只带回答过的条目）。"""
+        _intro, questions, _trailer = parse_clarify_questions(self.clarify_output.toPlainText())
+        answers = self._collect_clarify_answers()
+        if not questions:
+            return (answers[0].strip() if answers else "")
+        lines: list[str] = []
+        for index, question in enumerate(questions):
+            answer = answers[index].strip() if index < len(answers) else ""
+            if answer:
+                lines.append(f"{index + 1}. {question}\n   答：{answer}")
+        return "\n".join(lines)
 
     def _build_generate_step(self) -> QWidget:
         page = QWidget()
@@ -506,6 +647,9 @@ class WizardPage(QWidget):
         if self._draft is None:
             return
         self.clarify_output.clear()
+        self._clarify_streaming = True
+        self._clarify_timer.stop()
+        self._render_clarify_questions()  # 先清空上一轮的回答并显示「AI 正在提问…」
         self._token = CancellationToken()
         self._pool.start(_ClarifyTask(self._service, self._draft, self._token, self._signals))
 
@@ -513,7 +657,7 @@ class WizardPage(QWidget):
     def _on_start_generate(self) -> None:
         if self._draft is None:
             return
-        self._draft.clarify_answers = self.clarify_answers_edit.toPlainText().strip()
+        self._draft.clarify_answers = self._clarify_answers_markdown()
         self.generate_output.clear()
         self._token = CancellationToken()
         self.stack.setCurrentIndex(self.STEP_GENERATE)
@@ -530,9 +674,17 @@ class WizardPage(QWidget):
         target = self.clarify_output if self.stack.currentIndex() == self.STEP_CLARIFY else self.generate_output
         target.insertPlainText(piece)
         target.verticalScrollBar().setValue(target.verticalScrollBar().maximum())
+        if target is self.clarify_output:
+            self._clarify_timer.start()  # 合并抖动：最多每 120ms 重建一次问答列表
 
     @Slot(object)
     def _on_done(self, payload: object) -> None:
+        if self.stack.currentIndex() == self.STEP_CLARIFY:
+            # 澄清阶段结束：把最后一段也渲染成问答列表
+            self._clarify_streaming = False
+            self._clarify_timer.stop()
+            self._render_clarify_questions()
+            return
         if isinstance(payload, CourseOutline):
             self._outline = payload
             self.outline_tree.set_outline(payload)
@@ -547,6 +699,8 @@ class WizardPage(QWidget):
 
     @Slot(str)
     def _on_failed(self, message: str) -> None:
+        self._clarify_streaming = False
+        self._clarify_timer.stop()
         self.generate_bar.setRange(0, 1)
         self.generate_bar.setValue(0)
         self.stack.setCurrentIndex(self.STEP_CLARIFY if self._outline is None else self.STEP_PREVIEW)
@@ -575,7 +729,9 @@ class WizardPage(QWidget):
         self.user_outline_edit.clear()
         self.tags_edit.clear()
         self.clarify_output.clear()
-        self.clarify_answers_edit.clear()
+        self._clarify_streaming = False
+        self._clarify_timer.stop()
+        self._render_clarify_questions()
         self.generate_output.clear()
         self.outline_tree.clear()
         self.issues_label.clear()

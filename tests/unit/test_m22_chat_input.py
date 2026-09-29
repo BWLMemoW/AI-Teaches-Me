@@ -37,3 +37,27 @@ def test_chat_input_ctrl_enter_sends(qtbot) -> None:
     assert blocker.args == ["这两处是同一回事吗？", ""]
     assert drawer.input_edit.toPlainText() == ""  # 发送后清空
     assert "我：这两处是同一回事吗？" in drawer.history.toPlainText()
+
+
+def test_chat_history_is_not_focusable(qtbot) -> None:
+    """回归：记录区（大框）曾被误当成输入框 → 现在不可获焦且明确标注「只读」。"""
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+
+    assert drawer.history.isReadOnly() is True
+    assert drawer.history.focusPolicy() == Qt.FocusPolicy.NoFocus
+    assert drawer.input_edit.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    assert "只读" in drawer.history.placeholderText() or "记录" in drawer.history.placeholderText()
+
+
+def test_chat_input_is_attached_to_send_button(qtbot) -> None:
+    """输入框与发送按钮同一行（普通聊天应用的布局）。"""
+    from PySide6.QtWidgets import QPushButton
+
+    drawer = ChatDrawer()
+    qtbot.addWidget(drawer)
+    drawer.show()
+
+    assert drawer.send_button.text() == "发送"
+    assert drawer.input_edit.parent() is not None
+    assert isinstance(drawer.send_button, QPushButton)

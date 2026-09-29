@@ -40,9 +40,16 @@ class ChatDrawer(QWidget):
         title.setProperty("role", "subtitle")
         layout.addWidget(title)
 
+        history_label = QLabel("对话记录（只读）")
+        history_label.setProperty("role", "muted")
+        layout.addWidget(history_label)
+
         self.history = QPlainTextEdit()
         self.history.setReadOnly(True)
-        self.history.setPlaceholderText("选中讲义里的句子后提问，回答会带上这一节的上下文。")
+        # 记录区不可获焦：避免被误当成输入框（曾出现「上面的输不了字」）
+        self.history.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.history.setObjectName("ChatHistory")
+        self.history.setPlaceholderText("这里会显示你与老师的问答记录（不可直接编辑）。")
         layout.addWidget(self.history, 1)
 
         self.selection_label = QLabel("未选中片段")
@@ -50,9 +57,13 @@ class ChatDrawer(QWidget):
         self.selection_label.setWordWrap(True)
         layout.addWidget(self.selection_label)
 
+        input_label = QLabel("你的追问")
+        input_label.setProperty("role", "muted")
+        layout.addWidget(input_label)
+
         self.input_edit = _InputBox()
-        self.input_edit.setPlaceholderText("输入追问，Ctrl+Enter 发送")
-        self.input_edit.setFixedHeight(72)
+        self.input_edit.setPlaceholderText("在这里输入追问（Ctrl+Enter 发送）")
+        self.input_edit.setFixedHeight(84)
         # 明确保证「可以输入」：不被禁用、非只读、能拿焦点（曾出现「文字输不进去」）
         self.input_edit.setEnabled(True)
         self.input_edit.setReadOnly(False)
@@ -60,16 +71,19 @@ class ChatDrawer(QWidget):
         self.input_edit.submit.connect(self._on_send)
         layout.addWidget(self.input_edit)
 
-        row = QHBoxLayout()
+        # 输入框与发送按钮同一行（像普通聊天应用），输入框占满剩余宽度
+        composer = QHBoxLayout()
+        composer.addWidget(self.input_edit, 1)
+        buttons = QVBoxLayout()
         self.send_button = QPushButton("发送")
         self.send_button.setProperty("role", "primary")
         self.send_button.clicked.connect(self._on_send)
-        row.addWidget(self.send_button)
+        buttons.addWidget(self.send_button)
         self.stop_button = QPushButton("停止")
         self.stop_button.clicked.connect(self.stop_requested.emit)
-        row.addWidget(self.stop_button)
-        row.addStretch(1)
-        layout.addLayout(row)
+        buttons.addWidget(self.stop_button)
+        composer.addLayout(buttons)
+        layout.addLayout(composer)
 
     def focus_input(self) -> None:
         """把焦点给输入框（打开小节 / 点开抽屉时调用）。"""

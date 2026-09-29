@@ -245,6 +245,9 @@ QListWidget#NavList::item {{
 QListWidget#NavList::item:hover {{ background-color: {tint(0.08)}; color: {c.text}; }}
 QListWidget#NavList::item:selected {{ background-color: {tint(0.14)}; color: {c.primary}; font-weight: 600; }}
 
+/* 追问抽屉：记录区与输入框在视觉上区分开（M23） */
+QPlainTextEdit#ChatHistory {{ background-color: {c.surface_alt}; }}
+
 /* 列表 / 树 */
 QListWidget, QTreeWidget, QTreeView, QListView {{
   background-color: {c.surface};

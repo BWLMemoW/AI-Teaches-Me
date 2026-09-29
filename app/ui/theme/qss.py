@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from ...core.config import Background
@@ -125,6 +126,7 @@ def build_qss(
     title = base + 7
     width = reading_width or 820
     tint = lambda alpha: _rgba(c.primary, alpha)  # noqa: E731 - 局部小助手
+    check_icon = (Path(__file__).resolve().parents[1] / "assets" / "icons" / "check.svg").as_posix()
     return f"""
 /* AI Teaches Me · {theme.name}（{mode}）· 生成的 QSS v2，请勿手工改数值 */
 QWidget {{
@@ -199,6 +201,23 @@ QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleS
   border-color: {c.primary};
 }}
 QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled {{ background-color: {c.surface_alt}; color: {c.text_muted}; }}
+
+/* 复选框 / 单选框：必须显式画指示器，否则在自定义 QSS 下会变成看不清的空框 */
+QCheckBox::indicator, QRadioButton::indicator {{
+  width: 15px; height: 15px;
+  border: 1px solid {c.border};
+  border-radius: 4px;
+  background-color: {c.surface};
+}}
+QRadioButton::indicator {{ border-radius: 8px; }}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {c.primary}; }}
+QCheckBox::indicator:checked {{
+  background-color: {c.primary};
+  border-color: {c.primary};
+  image: url({check_icon});
+}}
+QRadioButton::indicator:checked {{ background-color: {c.primary}; border: 4px solid {c.surface}; outline: 1px solid {c.primary}; }}
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{ background-color: {c.surface_alt}; border-color: {c.border}; }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{
   background-color: {c.surface};

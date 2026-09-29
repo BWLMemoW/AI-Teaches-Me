@@ -83,7 +83,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._maybe_show_first_run)
 
         self.setWindowTitle("AI Teaches Me")
-        self.resize(1220, 780)
+        self.resize(1220, 800)
+        self.setMinimumSize(900, 600)  # 小屏可用；窗口尺寸由 main.py 按屏幕钳制
 
         central = QWidget()
         layout = QHBoxLayout(central)

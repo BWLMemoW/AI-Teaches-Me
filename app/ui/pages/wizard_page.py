@@ -178,9 +178,11 @@ class WizardPage(QWidget):
         self.icon_list = QListWidget()
         self.icon_list.setViewMode(QListView.ViewMode.IconMode)
         self.icon_list.setIconSize(QSize(48, 48))
-        self.icon_list.setGridSize(QSize(66, 76))
+        self.icon_list.setGridSize(QSize(72, 80))
         self.icon_list.setMovement(QListView.Movement.Static)
-        self.icon_list.setFixedHeight(118)
+        self.icon_list.setWrapping(True)
+        self.icon_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.icon_list.setFixedHeight(172)
         self.icon_list.currentRowChanged.connect(lambda *_: self._refresh_icon_preview())
         layout.addWidget(self.icon_list)
 

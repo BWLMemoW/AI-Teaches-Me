@@ -147,6 +147,22 @@ def run_self_check(args: argparse.Namespace) -> int:
     return 0 if not errors else 1
 
 
+def _fit_to_screen(app, window) -> None:
+    """把窗口钳制在屏幕可用区域内并居中（否则固定 1220 宽会超出屏幕 → 右侧被裁切）。"""
+    screen = app.primaryScreen()
+    if screen is None:
+        return
+    available = screen.availableGeometry()
+    # 先按屏幕收窄，再兜底一个可用下限（屏幕极小时接受轻微溢出，但不至于不可用）
+    width = max(760, min(int(window.width()), available.width() - 40))
+    height = max(560, min(int(window.height()), available.height() - 60))
+    window.resize(width, height)
+    window.move(
+        available.x() + max(0, (available.width() - width) // 2),
+        available.y() + max(0, (available.height() - height) // 3),
+    )
+
+
 def _install_diagnostics(result) -> None:
     """把未捕获异常与 Qt 槽函数异常写进日志（pythonw 下 stderr 不可见，M9 可观测性）。"""
     import logging
@@ -199,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     _install_diagnostics(result)
     window = MainWindow(result, services=services)
     window.show()
+    _fit_to_screen(app, window)
     _ensure_visible(window)
     return int(app.exec())
 

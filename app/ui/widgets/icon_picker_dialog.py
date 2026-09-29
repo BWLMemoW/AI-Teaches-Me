@@ -82,8 +82,10 @@ class IconPickerDialog(QDialog):
         self.icon_list = QListWidget()
         self.icon_list.setViewMode(QListView.ViewMode.IconMode)
         self.icon_list.setIconSize(QSize(48, 48))
-        self.icon_list.setGridSize(QSize(72, 80))
+        self.icon_list.setGridSize(QSize(76, 84))
         self.icon_list.setMovement(QListView.Movement.Static)
+        self.icon_list.setWrapping(True)
+        self.icon_list.setResizeMode(QListView.ResizeMode.Adjust)
         self.icon_list.currentRowChanged.connect(lambda *_: self._refresh_preview())
         layout.addWidget(self.icon_list, 1)
 

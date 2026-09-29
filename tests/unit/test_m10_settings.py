@@ -202,3 +202,92 @@ def test_settings_page_scrolls_instead_of_squashing(qtbot, tmp_path) -> None:
     # 修复前：整页每个分组只剩 ~13px 的标题细条；修复后：分组保持自身高度
     assert min(heights) > 40, f"有分组被压扁成细条：{heights}"
     assert sum(1 for height in heights if height > 100) >= 6, f"多数分组仍未恢复高度：{heights}"
+
+# --- M11：试讲修复 / 学习方式开关 / 新建人设 -----------------------------
+class _FakeTrialClient:
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+        self.kwargs: dict = {}
+
+    async def stream_chat(self, messages, **kwargs):
+        self.messages = list(messages)
+        self.kwargs = dict(kwargs)
+        for piece in ("学姐说：先看两边的列数对不对，", "再动手相乘。"):
+            yield piece
+
+
+def test_trial_sends_persona_as_system_message(qtbot, tmp_path) -> None:
+    """回归：试讲曾报 `stream_chat() got an unexpected keyword argument 'system'`。"""
+    from app.ui.widgets.preference_panel import PreferencePanel
+
+    service = _service(tmp_path)
+    client = _FakeTrialClient()
+    panel = PreferencePanel(service, courses_dir=tmp_path / "Courses", client=client)
+    qtbot.addWidget(panel)
+
+    panel.trial_button.click()
+    qtbot.waitUntil(lambda: "学姐说" in panel.trial_output.toPlainText(), timeout=8000)
+
+    assert "system" not in client.kwargs  # 不能再把 system 当关键字参数传给 stream_chat
+    assert client.messages[0]["role"] == "system"
+    assert client.messages[-1]["role"] == "user"
+    assert panel.trial_output.toPlainText().strip().endswith("再动手相乘。")
+
+
+def test_learning_toggles_are_explicit(qtbot, tmp_path) -> None:
+    from app.ui.widgets.preference_panel import PreferencePanel
+
+    service = _service(tmp_path)
+    panel = PreferencePanel(service, courses_dir=tmp_path / "Courses")
+    qtbot.addWidget(panel)
+
+    assert "不做测验" in panel.quiz_check.text()
+    assert "不做作业" in panel.self_assessment_check.text()
+
+    panel.quiz_check.setChecked(False)
+    panel.self_assessment_check.setChecked(False)
+
+    saved = _config(tmp_path)["generation"]
+    assert saved["quiz_enabled"] is False
+    assert saved["self_assessment_enabled"] is False
+
+
+def test_persona_editor_builds_and_validates(qtbot, tmp_path) -> None:
+    from app.ui.widgets.persona_editor_dialog import PersonaEditorDialog
+
+    dialog = PersonaEditorDialog(existing_ids={"default-teacher"})
+    qtbot.addWidget(dialog)
+    dialog.id_edit.setText("gentle-senior")
+    dialog.name_edit.setText("温柔学姐")
+    dialog.avatar_edit.setText("📚")
+    dialog.tone_edit.setText("温柔, 鼓励式")
+    dialog.roleplay_check.setChecked(False)
+
+    persona = dialog.build_persona()
+
+    assert persona.id == "gentle-senior"
+    assert persona.name == "温柔学姐"
+    assert persona.tone == ("温柔", "鼓励式")
+    assert persona.allow_roleplay is False
+    assert "讲课习惯" in persona.body
+
+    dialog.id_edit.setText("default-teacher")
+    dialog._validate_live()
+    assert "已存在" in dialog.error_label.text()
+
+
+def test_created_persona_is_saved_and_listed(qtbot, tmp_path) -> None:
+    from app.services.persona_service import PersonaService
+    from app.ui.widgets.persona_editor_dialog import PersonaEditorDialog
+
+    service = PersonaService(user_dir=tmp_path / "personas")
+    dialog = PersonaEditorDialog(existing_ids={item.id for item in service.list_personas()})
+    qtbot.addWidget(dialog)
+    dialog.id_edit.setText("my-coach")
+    dialog.name_edit.setText("我的教练")
+    persona = dialog.build_persona()
+
+    service.create_persona(persona)
+
+    assert (tmp_path / "personas" / "my-coach.md").exists()
+    assert any(item.id == "my-coach" for item in service.list_personas())

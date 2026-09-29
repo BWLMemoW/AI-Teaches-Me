@@ -35,7 +35,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...agents.persona import Persona
 from ...services.persona_service import PersonaService
+from .persona_editor_dialog import PersonaEditorDialog
 
 APP_VERSION = "0.2.0"
 COMPLIANCE_NOTES = (
@@ -62,12 +64,14 @@ class _TrialTask(QRunnable):
     @Slot()
     def run(self) -> None:
         async def go() -> str:
+            messages: list[dict] = []
+            if self._persona_body:
+                messages.append({"role": "system", "content": self._persona_body})
+            messages.append(
+                {"role": "user", "content": "用你的风格给开场：『矩阵乘法不是逐项相乘』。80 字以内，不要输出 JSON。"}
+            )
             parts: list[str] = []
-            async for piece in self._client.stream_chat(
-                [{"role": "user", "content": "用你的风格给开场：『矩阵乘法不是逐项相乘』。80 字以内，不要输出 JSON。"}],
-                task="teach",
-                system=self._persona_body or None,
-            ):
+            async for piece in self._client.stream_chat(messages, task="teach"):
                 parts.append(piece)
             return "".join(parts)
 
@@ -119,6 +123,10 @@ class PreferencePanel(QWidget):
         self.persona_combo = QComboBox()
         self.persona_combo.currentIndexChanged.connect(self._on_persona_changed)
         row.addWidget(self.persona_combo, 1)
+        self.create_button = QPushButton("+ 新建人设")
+        self.create_button.setProperty("role", "primary")
+        self.create_button.clicked.connect(self._on_create_persona)
+        row.addWidget(self.create_button)
         self.import_button = QPushButton("导入人设…")
         self.import_button.clicked.connect(self._on_import_persona)
         row.addWidget(self.import_button)
@@ -166,11 +174,17 @@ class PreferencePanel(QWidget):
             widget.toggled.connect(self._save)
             form.addRow("", widget)
 
-        self.quiz_check = QCheckBox("默认出小测验")
-        self.self_assessment_check = QCheckBox("默认要求自评掌握度")
+        self.quiz_check = QCheckBox("出小测验（关掉 = 不做测验，讲义里不会出现答题卡）")
+        self.self_assessment_check = QCheckBox("要求自评掌握度（关掉 = 不做作业式自评，读完直接标记完成）")
         for widget in (self.quiz_check, self.self_assessment_check):
             widget.toggled.connect(self._save)
             form.addRow("", widget)
+
+        hint_learning = QLabel("按 FR-18：关掉上面两项后，讲义第 5 段只保留小结与下节预告，进度与时长照常累计；"
+                              "也可以在单个小节里「跟随课程 / 强制开 / 强制关」。")
+        hint_learning.setProperty("role", "muted")
+        hint_learning.setWordWrap(True)
+        form.addRow("", hint_learning)
 
         self.throttle_spin = QSpinBox()
         self.throttle_spin.setRange(30, 60)
@@ -425,6 +439,26 @@ class PreferencePanel(QWidget):
         self._service.config.persona.allow_roleplay = self.allow_roleplay_check.isChecked()
         self._service.save()
         self.status_message.emit("人设角色扮演开关已更新（只影响表达层）")
+
+    @Slot()
+    def _on_create_persona(self) -> None:
+        """新建人设：弹窗填表 → 写入 personas/<id>.md 并立即选用。"""
+        dialog = PersonaEditorDialog(
+            existing_ids={persona.id for persona in self._personas.list_personas()}, parent=self
+        )
+        if not dialog.exec():
+            return
+        persona: Persona = dialog.created_persona
+        try:
+            self._personas.create_persona(persona)
+        except Exception as exc:  # noqa: BLE001
+            self.status_message.emit(f"创建失败：{exc}")
+            return
+        self._service.config.persona.default = persona.id
+        self._service.save()
+        self._reload_personas(persona.id)
+        self.config_saved.emit()
+        self.status_message.emit(f"已创建人设 {persona.name}（{persona.id}）并设为默认")
 
     @Slot()
     def _on_import_persona(self) -> None:

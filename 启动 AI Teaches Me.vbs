@@ -14,6 +14,17 @@ Else
     pythonw = "pythonw.exe"
 End If
 
+' 先关掉正在运行的旧实例，保证双击后一定是最新代码
+Dim wmi, procs, proc
+Set wmi = GetObject("winmgmts:\\.\root\cimv2")
+Set procs = wmi.ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name LIKE 'python%'")
+For Each proc In procs
+    If Not IsNull(proc.CommandLine) Then
+        If InStr(proc.CommandLine, "app.main") > 0 Then
+            shell.Run "taskkill /PID " & proc.ProcessId & " /F", 0, True
+        End If
+    End If
+Next
 shell.CurrentDirectory = root
 cmd = """" & pythonw & """ -m app.main"
 shell.Run cmd, 1, False

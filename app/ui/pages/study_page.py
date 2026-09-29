@@ -278,7 +278,13 @@ class StudyPage(QWidget):
     # --- 课程 / 小节装载 -------------------------------------------------
     def open_course(self, course_dir: str | Path, lesson_dir: str | Path | None = None) -> None:
         self._course_dir = Path(course_dir)
-        self.lesson_tree.load_course(self._course_dir)
+        from ...services.icon_service import IconService
+        from ..icon_render import course_icon_pixmap
+
+        icon = IconService.load(self._course_dir)
+        self.lesson_tree.load_course(
+            self._course_dir, icon_pixmap=course_icon_pixmap(self._course_dir, icon, size=40, padding=6)
+        )
         self.course_opened.emit(self._course_dir)
         if lesson_dir is not None:
             self.load_lesson(Path(lesson_dir))

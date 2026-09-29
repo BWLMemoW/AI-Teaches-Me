@@ -146,7 +146,12 @@ class NotesPage(QWidget):
 
             printer = print_pdf
         try:
-            result = export_service.export_pdf(self._course_dir, printer=printer, scope="all")
+            from ...services.icon_service import IconService, read_icon_svg
+
+            icon_svg = read_icon_svg(self._course_dir, IconService.load(self._course_dir))
+            result = export_service.export_pdf(
+                self._course_dir, printer=printer, scope="all", icon_svg=icon_svg
+            )
         except Exception as exc:  # noqa: BLE001
             self.status_message.emit(f"导出 PDF 失败：{exc}")
             return

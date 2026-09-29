@@ -7,7 +7,11 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QGridLayout,
     QListView,
+    QMenu,
+    QScrollArea,
+    QWidget,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from ...services import course_service, icon_service
 from ..icon_render import course_icon_pixmap
+from ..widgets.course_card import CardStyle, CourseCard, load_progress
 from ...services.library_service import SORT_OPTIONS, VIEW_MODES, LibraryFilter, LibraryService
 
 
@@ -32,6 +37,8 @@ class LibraryPage(QWidget):
     complete_toggled = Signal(object, bool)
     open_in_explorer = Signal(object)
     backup_requested = Signal(object)
+    icon_requested = Signal(object)
+    color_requested = Signal(object)
     restore_requested = Signal()
 
     def __init__(self, courses_dir: str | Path, *, service: LibraryService | None = None, parent=None) -> None:
@@ -40,6 +47,8 @@ class LibraryPage(QWidget):
         self._service = service
         self._summaries: list[course_service.CourseSummary] = []
         self._icon_cache: dict[str, object] = {}
+        self._progress_cache: dict[str, dict] = {}
+        self._selected: object | None = None
 
         layout = QVBoxLayout(self)
 
@@ -133,6 +142,20 @@ class LibraryPage(QWidget):
         self.course_list.currentRowChanged.connect(lambda *_: self._update_buttons())
         layout.addWidget(self.course_list, 1)
 
+        # 卡片网格（M9）：与列表视图二选一显示
+        self.card_style = CardStyle.from_theme()
+        self.card_scroll = QScrollArea()
+        self.card_scroll.setWidgetResizable(True)
+        self.card_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.card_host = QWidget()
+        self.card_grid = QGridLayout(self.card_host)
+        self.card_grid.setContentsMargins(4, 4, 4, 4)
+        self.card_grid.setSpacing(12)
+        self.card_grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.card_scroll.setWidget(self.card_host)
+        layout.addWidget(self.card_scroll, 1)
+        self.card_cards: list[CourseCard] = []
+
         actions = QHBoxLayout()
         self.open_button = QPushButton("打开")
         self.open_button.setProperty("role", "primary")
@@ -210,6 +233,95 @@ class LibraryPage(QWidget):
             sort=str(self.sort_combo.currentData() or "recent"),
         )
 
+    # --- 卡片网格（M9） --------------------------------------------------
+    def set_card_style(self, style: CardStyle) -> None:
+        """主题切换时刷新卡片配色。"""
+        self.card_style = style
+        self._rebuild_cards()
+
+    def _icon_pixmap(self, summary):
+        cached = self._icon_cache.get(summary.id)
+        if cached is not None:
+            return cached
+        icon = icon_service.IconService.load(summary.path)
+        pixmap = course_icon_pixmap(summary.path, icon, size=112, padding=18)
+        self._icon_cache[summary.id] = pixmap
+        return pixmap
+
+    def _progress_of(self, summary) -> dict:
+        cached = self._progress_cache.get(summary.id)
+        if cached is None:
+            cached = load_progress(summary.path)
+            self._progress_cache[summary.id] = cached
+        return cached
+
+    def _rebuild_cards(self) -> None:
+        while self.card_grid.count():
+            item = self.card_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.card_cards = []
+        for summary in self._summaries:
+            card = CourseCard(
+                summary,
+                icon_pixmap=self._icon_pixmap(summary),
+                style=self.card_style,
+                progress=self._progress_of(summary),
+            )
+            card.activated.connect(self._on_card_activated)
+            card.context_requested.connect(self._on_card_context)
+            self.card_cards.append(card)
+        self._reflow_cards()
+        self._sync_card_selection()
+
+    def _reflow_cards(self) -> None:
+        """按可用宽度决定列数（自适应网格）。"""
+        if not self.card_cards:
+            return
+        while self.card_grid.count():
+            self.card_grid.takeAt(0)
+        width = max(self.card_scroll.viewport().width(), CourseCard.CARD_WIDTH)
+        columns = max(1, (width - 8) // (CourseCard.CARD_WIDTH + 12))
+        for index, card in enumerate(self.card_cards):
+            self.card_grid.addWidget(card, index // columns, index % columns)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        super().resizeEvent(event)
+        self._reflow_cards()
+
+    def _sync_card_selection(self) -> None:
+        for card in self.card_cards:
+            card.set_selected(card.summary is self._selected)
+
+    def _on_card_activated(self, summary) -> None:
+        self._selected = summary
+        self._sync_card_selection()
+        self._update_buttons()
+        self.open_course.emit(summary)
+
+    def _on_card_context(self, summary, global_pos) -> None:
+        self._selected = summary
+        self._sync_card_selection()
+        self._update_buttons()
+        menu = QMenu(self)
+        entries = (
+            ("打开", lambda: self.open_course.emit(summary)),
+            ("换图标…", lambda: self.icon_requested.emit(summary)),
+            ("换颜色…", lambda: self.color_requested.emit(summary)),
+            ("标记完成", lambda: self.complete_toggled.emit(summary, True)),
+            ("取消完成", lambda: self.complete_toggled.emit(summary, False)),
+            ("重命名…", lambda: self.rename_requested.emit(summary)),
+            ("在资源管理器中打开", lambda: self.open_in_explorer.emit(summary)),
+            ("备份课程…", lambda: self.backup_requested.emit(summary)),
+            ("删除…", lambda: self.delete_requested.emit(summary)),
+        )
+        for label, handler in entries:
+            menu.addAction(label).triggered.connect(handler)
+        menu.exec(global_pos)
+
+    def current_cards(self) -> list:
+        return list(self.card_cards)
     def apply_filters(self) -> list[course_service.CourseSummary]:
         filter_ = self.current_filter()
         if self._service is not None:
@@ -230,15 +342,12 @@ class LibraryPage(QWidget):
         return pixmap
 
     def _apply_view_mode(self) -> None:
-        mode = str(self.view_mode_combo.currentData() or "grid")
-        if mode == "grid":
-            self.course_list.setViewMode(QListView.ViewMode.IconMode)
-            self.course_list.setResizeMode(QListView.ResizeMode.Adjust)
-            self.course_list.setMovement(QListView.Movement.Static)
-            self.course_list.setUniformItemSizes(True)
-        else:
-            self.course_list.setViewMode(QListView.ViewMode.ListMode)
+        grid = str(self.view_mode_combo.currentData() or "grid") == "grid"
+        self.card_scroll.setVisible(grid)
+        self.course_list.setVisible(not grid)
         self.set_courses(self._summaries)
+        if grid:
+            self._reflow_cards()
 
     def _card_text(self, summary: course_service.CourseSummary) -> str:
         lines = [summary.name]
@@ -260,6 +369,7 @@ class LibraryPage(QWidget):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
                 item.setToolTip(self._describe(summary))
             self.course_list.addItem(item)
+        self._rebuild_cards()
         self.empty_label.setVisible(not items)
         if not items:
             self.banner.setText("没有符合条件的课程（换个关键词或清空标签筛选）。")
@@ -283,6 +393,8 @@ class LibraryPage(QWidget):
         return "  " + "  ·  ".join(parts)
 
     def selected_course(self) -> course_service.CourseSummary | None:
+        if self._selected is not None:
+            return self._selected  # type: ignore[return-value]
         item = self.course_list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
 

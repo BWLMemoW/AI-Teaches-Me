@@ -124,7 +124,7 @@ def export_markdown(
     return ExportResult(path=destination, scope=scope, size_bytes=len(text.encode("utf-8")), lessons=lessons)
 
 
-def render_html(markdown_text: str, *, title: str = "AI Teaches Me 导出") -> str:
+def render_html(markdown_text: str, *, title: str = "AI Teaches Me 导出", icon_svg: str | None = None) -> str:
     """Markdown → HTML（离线：只用本地依赖，公式沿用 KaTeX 的 $$ 约定）。"""
     try:
         import markdown as markdown_module
@@ -135,12 +135,23 @@ def render_html(markdown_text: str, *, title: str = "AI Teaches Me 导出") -> s
         )
     except Exception:  # noqa: BLE001 - 没有 python-Markdown 时退化为纯文本包裹
         body = "<pre>" + markdown_text.replace("&", "&amp;").replace("<", "&lt;") + "</pre>"
+    cover = ""
+    if icon_svg:
+        stamped = datetime.now().strftime("%Y-%m-%d %H:%M")
+        cover = (
+            '<section style="page-break-after: always; text-align: center; padding-top: 140px;">'
+            '<div style="display: inline-block; width: 160px; height: 160px;">' + icon_svg + "</div>"
+            + '<h1 style="margin: 24px 0 8px;">' + title + "</h1>"
+            + '<p style="color: #666;">导出时间：' + stamped + "</p>"
+            "</section>"
+        )
     return (
         "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\" />"
         f"<title>{title}</title>"
         "<style>body{font-family:'Microsoft YaHei',sans-serif;line-height:1.75;margin:32px auto;max-width:820px;}"
         "table{border-collapse:collapse;}td,th{border:1px solid #ccc;padding:4px 8px;}"
         "pre{background:#f5f5f5;padding:12px;overflow-x:auto;}</style></head><body>"
+        + cover
         + body
         + "</body></html>"
     )
@@ -150,6 +161,7 @@ def export_pdf(
     course_dir: str | Path,
     *,
     printer,
+    icon_svg: str | None = None,
     scope: str = "all",
     lesson_ids: list[str] | None = None,
     target: str | Path | None = None,
@@ -159,7 +171,7 @@ def export_pdf(
     meta = file_repository.read_json_or_default(course / "course.json", {}) or {}
     name = str(meta.get("name") or course.name)
     text, lessons = collect_markdown(course, scope=scope, lesson_ids=lesson_ids)
-    html = render_html(text, title=name)
+    html = render_html(text, title=name, icon_svg=icon_svg)
     destination = (
         Path(target)
         if target is not None

@@ -187,15 +187,19 @@ def test_library_page_card_grid_shows_icons(qtbot, tmp_path: Path) -> None:
     qtbot.addWidget(page)
     page.refresh()
 
-    assert page.course_list.viewMode() == QListView.ViewMode.IconMode
-    item = page.course_list.item(0)
-    assert item.icon().isNull() is False
-    assert "ATM 使用指南" in item.text()
-    assert "#" in item.text() or "小节" in item.text()
+    # M9 起网格模式改用真正的卡片组件（不再依赖 QListWidget 的 IconMode）
+    cards = page.current_cards()
+    assert len(cards) == 1
+    card = cards[0]
+    assert "ATM 使用指南" in card.title_label.text()
+    assert card.icon_label.pixmap() is not None
+    assert card.icon_label.pixmap().isNull() is False
+    assert card.findChildren(object) is not None
+    assert "小节" in card.meta_label.text()
 
     page.view_mode_combo.setCurrentIndex(page.view_mode_combo.findData("list"))
-    assert page.course_list.viewMode() == QListView.ViewMode.ListMode
     assert page.course_list.count() == 1
+    assert page.course_list.viewMode() == QListView.ViewMode.ListMode
 
 
 @pytest.mark.ui

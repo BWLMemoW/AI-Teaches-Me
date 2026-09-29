@@ -147,6 +147,36 @@ def run_self_check(args: argparse.Namespace) -> int:
     return 0 if not errors else 1
 
 
+def _install_diagnostics(result) -> None:
+    """把未捕获异常与 Qt 槽函数异常写进日志（pythonw 下 stderr 不可见，M9 可观测性）。"""
+    import logging
+    import traceback
+
+    logger = logging.getLogger("atm")
+
+    def hook(exc_type, exc, tb) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        logger.error("未捕获异常：%s", "".join(traceback.format_exception(exc_type, exc, tb)))
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = hook
+
+
+def _ensure_visible(window) -> bool:
+    """启动后自检主窗口可见性（曾出现「窗口被隐藏、按钮点了没反应」的启动事故）。"""
+    import logging
+
+    logger = logging.getLogger("atm")
+    if not window.isVisible():
+        logger.warning("主窗口不可见，正在强制显示并置前")
+        window.show()
+        window.raise_()
+        window.activateWindow()
+    visible = bool(window.isVisible())
+    logger.info("启动自检：主窗口可见=%s", visible)
+    return visible
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     if args.self_check:
@@ -166,8 +196,10 @@ def main(argv: list[str] | None = None) -> int:
 
     result = prepare_bootstrap(args)
     services = build_services(result)
+    _install_diagnostics(result)
     window = MainWindow(result, services=services)
     window.show()
+    _ensure_visible(window)
     return int(app.exec())
 
 

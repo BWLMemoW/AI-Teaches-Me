@@ -26,7 +26,9 @@ from ..services import course_service
 from .pages.library_page import LibraryPage
 from .pages.notes_page import NotesPage
 from .pages.qa_page import QaPage
+from .widgets.course_card import CardStyle
 from .widgets.first_run_dialog import FirstRunDialog
+from .widgets.icon_picker_dialog import IconPickerDialog
 from .pages.settings_page import SettingsPage
 from .pages.study_page import StudyPage
 from .pages.wizard_page import WizardPage
@@ -141,6 +143,8 @@ class MainWindow(QMainWindow):
         library.open_in_explorer.connect(self._open_in_explorer)
         library.backup_requested.connect(self._backup_course)
         library.restore_requested.connect(self._restore_backup)
+        library.icon_requested.connect(lambda summary: self._open_icon_picker(summary))
+        library.color_requested.connect(lambda summary: self._open_icon_picker(summary))
 
         self.wizard_page.course_created.connect(self._on_course_created)
         self.wizard_page.status_message.connect(lambda message: self.statusBar().showMessage(message, 8000))
@@ -177,6 +181,7 @@ class MainWindow(QMainWindow):
 
             self._css_vars = to_css_vars(theme, mode, ui.background)
         self.study_page.apply_theme_vars(self._css_vars)
+        self.library_page.set_card_style(CardStyle.from_theme(ui.theme, mode))
         return self._css_vars
 
     @property
@@ -245,6 +250,21 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"《{summary.name}》已{'标记完成' if completed else '取消完成'}（内容未改动）", 8000
         )
+
+    @Slot(object)
+    def _open_icon_picker(self, summary: course_service.CourseSummary) -> None:
+        """卡片右键「换图标 / 换颜色」：预设、配色、或让 AI 生成。"""
+        dialog = IconPickerDialog(
+            course_dir=summary.path,
+            course_name=summary.name,
+            client=getattr(self._services, "client", None),
+            pool=self._pool,
+            parent=self,
+        )
+        if dialog.exec():
+            self.library_page._icon_cache.pop(summary.id, None)  # noqa: SLF001 - 图标变了要清缓存
+            self.refresh_library()
+            self.statusBar().showMessage(f"《{summary.name}》的图标已更新", 8000)
 
     @Slot(object)
     def _backup_course(self, summary: course_service.CourseSummary) -> None:

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -11,6 +12,21 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+class _InputBox(QPlainTextEdit):
+    """追问输入框：Ctrl+Enter 发送（控件级事件，比 QShortcut 更可靠）。"""
+
+    submit = Signal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        if (
+            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            self.submit.emit()
+            return
+        super().keyPressEvent(event)
 
 
 class ChatDrawer(QWidget):
@@ -34,9 +50,14 @@ class ChatDrawer(QWidget):
         self.selection_label.setWordWrap(True)
         layout.addWidget(self.selection_label)
 
-        self.input_edit = QPlainTextEdit()
+        self.input_edit = _InputBox()
         self.input_edit.setPlaceholderText("输入追问，Ctrl+Enter 发送")
         self.input_edit.setFixedHeight(72)
+        # 明确保证「可以输入」：不被禁用、非只读、能拿焦点（曾出现「文字输不进去」）
+        self.input_edit.setEnabled(True)
+        self.input_edit.setReadOnly(False)
+        self.input_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.input_edit.submit.connect(self._on_send)
         layout.addWidget(self.input_edit)
 
         row = QHBoxLayout()
@@ -49,6 +70,10 @@ class ChatDrawer(QWidget):
         row.addWidget(self.stop_button)
         row.addStretch(1)
         layout.addLayout(row)
+
+    def focus_input(self) -> None:
+        """把焦点给输入框（打开小节 / 点开抽屉时调用）。"""
+        self.input_edit.setFocus()
 
     def set_selection(self, text: str) -> None:
         self.selection = text

@@ -360,6 +360,11 @@ class StudyPage(QWidget):
         self._sync_depth(content)
         self._sync_persona(content)
         self.chat_drawer.load_records(lesson_service.load_chat(self._lesson_dir))
+        focus = getattr(self.chat_drawer, "focus_input", None)
+        if callable(focus):
+            focus()
+        self.chat_drawer.input_edit.setEnabled(True)
+        self.chat_drawer.input_edit.setReadOnly(False)
         self._load_context()
         self._hint_staleness(content)
         self.status_message.emit(f"已打开 {content.lesson_id}")

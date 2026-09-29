@@ -22,7 +22,14 @@ from typing import Any
 
 from ..core.cancel import CancellationToken
 from ..core.config import AppConfig, LLMProfile
-from ..core.errors import AuthError, ConfigError, FatalError, ProviderError, classify_exception
+from ..core.errors import (
+    AuthError,
+    ConfigError,
+    FatalError,
+    ProviderError,
+    TruncatedOutput,
+    classify_exception,
+)
 from ..core.routing import ModelRouter
 from ..infra.secret_store import SecretStore, resolve_api_key, resolve_base_url
 from .usage import UsageTracker
@@ -35,6 +42,10 @@ _CANCELLED = object()
 # 只有「请求形状不对」的 4xx 才值得换一种写法重试：
 # 401/403 是鉴权问题（按契约立即上报、绝不重试），429 走指数退避。
 DOWNGRADE_STATUSES: frozenset[int] = frozenset({400, 404, 405, 406, 409, 413, 415, 422})
+
+# 输出被 max_tokens 顶掉时的自动扩预算：只在「一个字都没吐出来」时做，避免重复文本
+MAX_ESCALATED_TOKENS = 32768
+MAX_ESCALATIONS = 2
 
 
 @dataclass
@@ -101,6 +112,7 @@ class LLMClient:
         web_search_backend: str | None = None,
         temperature: float | None = None,
         tool_sink: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[str]:
         """流式对话：逐段产出增量文本；``tool_sink`` 收集模型请求的工具调用（§4.5）。"""
         resolved = self._resolve_profile(task, profile, web_search_backend)
@@ -110,6 +122,8 @@ class LLMClient:
         response_format = (
             {"type": "json_schema", "json_schema": dict(json_schema)} if json_schema else None
         )
+        budget = max_tokens or resolved.max_tokens or None
+        escalations = 0
 
         for attempt in range(1, self.max_attempts + 1):
             if token.cancelled:
@@ -123,6 +137,7 @@ class LLMClient:
                     messages=list(messages),
                     tools=tools,
                     response_format=response_format,
+                    max_tokens=budget,
                     token=token,
                     temperature=temperature,
                     tool_sink=tool_sink,
@@ -134,6 +149,18 @@ class LLMClient:
                     emitted = True
                     yield piece
                 return
+            except TruncatedOutput:
+                # 一个字都没出来就被预算顶掉：直接把预算翻倍重来（不会重复已有文本）
+                if (
+                    not emitted
+                    and budget is not None
+                    and budget < MAX_ESCALATED_TOKENS
+                    and escalations < MAX_ESCALATIONS
+                ):
+                    escalations += 1
+                    budget = min(budget * 2, MAX_ESCALATED_TOKENS)
+                    continue
+                raise
             except ProviderError as exc:
                 # 4xx 多半是「某个可选字段不被这个 OpenAI 兼容端点接受」（例如 json_schema
                 # 形态的 response_format）。此时按「保留语义、逐步减配」的顺序再试一次。
@@ -147,6 +174,7 @@ class LLMClient:
                                 messages=list(messages),
                                 tools=candidate_tools,
                                 response_format=candidate_format,
+                                max_tokens=budget,
                                 token=token,
                                 temperature=temperature,
                                 tool_sink=tool_sink,
@@ -342,6 +370,7 @@ class LLMClient:
         messages: list[Mapping[str, Any]],
         tools: Sequence[Mapping[str, Any]] | None,
         response_format: Mapping[str, Any] | None,
+        max_tokens: int | None,
         token: CancellationToken,
         temperature: float | None,
         tool_sink: list[dict[str, Any]] | None,
@@ -356,14 +385,18 @@ class LLMClient:
             "stream": True,
             "temperature": resolved.temperature if temperature is None else float(temperature),
         }
-        if resolved.max_tokens:
-            kwargs["max_tokens"] = resolved.max_tokens
+        effective_tokens = max_tokens or resolved.max_tokens
+        if effective_tokens:
+            kwargs["max_tokens"] = effective_tokens
         if tools:
             kwargs["tools"] = list(tools)
         if response_format:
             kwargs["response_format"] = dict(response_format)
 
         reported_usage = False
+        finish_reason: str | None = None
+        text_chars = 0
+        reasoning_chars = 0
         try:
             async with self._open(resolved, api_key) as client:
                 try:
@@ -407,12 +440,32 @@ class LLMClient:
                                 task=task,
                             )
 
+                        for choice in getattr(chunk, "choices", None) or []:
+                            reason = getattr(choice, "finish_reason", None)
+                            if reason:
+                                finish_reason = str(reason)
+                            delta = getattr(choice, "delta", None)
+                            reasoning = getattr(delta, "reasoning_content", None)
+                            if reasoning:
+                                reasoning_chars += len(str(reasoning))
                         tool_collector.feed(chunk)
                         text = _extract_text(chunk)
                         if text:
+                            text_chars += len(text)
                             yield text
                     if tool_sink is not None:
                         tool_sink.extend(tool_collector.finish())
+                    if finish_reason == "length":
+                        raise TruncatedOutput(
+                            f"模型输出被 max_tokens={effective_tokens} 截断"
+                            + ("（正文一个字都没出来，预算被思考占满）" if not text_chars else "，只收到半截内容"),
+                            detail=f"finish_reason=length reasoning_chars={reasoning_chars}",
+                        )
+                    if not text_chars and reasoning_chars:
+                        raise TruncatedOutput(
+                            "模型只输出了思考、没有正文：token 预算被思考占满",
+                            detail=f"reasoning_chars={reasoning_chars} max_tokens={effective_tokens}",
+                        )
                 finally:
                     unsubscribe()
         finally:

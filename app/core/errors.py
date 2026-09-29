@@ -113,6 +113,17 @@ class FatalError(ProviderError):
     user_message = "模型服务返回了无法处理的错误"
 
 
+class TruncatedOutput(ProviderError):
+    """模型输出被 ``max_tokens`` 顶掉：正文为空，或只吐了半截。
+
+    典型现场是推理型模型（先思考几千 token）：思考与正文共用同一份预算，
+    预算不够时 ``finish_reason="length"`` 且正文缺失／被截断。
+    """
+
+    retryable = False
+    user_message = "模型这次没说完就被 token 上限截断了，请在设置里调大 max_tokens"
+
+
 def status_of(exc: BaseException) -> int | None:
     """尽最大努力从异常里取出 HTTP 状态码。"""
     for attr in ("status_code", "status", "http_status", "code"):

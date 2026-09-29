@@ -714,8 +714,10 @@ class WizardPage(QWidget):
                 "结构自检：没问题，可以直接创建。" if not issues else "结构自检提示：" + "；".join(issues)
             )
             self.stack.setCurrentIndex(self.STEP_PREVIEW)
+            note = getattr(self._draft, "materials_error", "") if self._draft is not None else ""
+            tail = f"（课程资料未生成：{note}；创建时会用大纲本地兜底写出文档）" if note else ""
             self.status_message.emit(
-                f"大纲已生成：{len(payload.chapters)} 章 / {payload.total_lessons()} 小节"
+                f"大纲已生成：{len(payload.chapters)} 章 / {payload.total_lessons()} 小节{tail}"
             )
 
     @Slot(str)

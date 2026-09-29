@@ -6,6 +6,7 @@ Agent 只负责「读上下文 → 生成」，UI 只负责展示与编辑（§4
 
 from __future__ import annotations
 
+import logging
 import secrets
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
@@ -29,6 +30,8 @@ from ..core.models import (
 from ..core.paths import safe_component
 from ..infra import file_repository
 from ..infra.sqlite_index import SqliteIndex
+
+LOGGER = logging.getLogger(__name__)
 
 
 def now_iso() -> str:
@@ -57,6 +60,7 @@ class OutlineDraft:
     goal_type: str = "general"
     goal_types: list[str] = field(default_factory=list)
     materials_md: str = ""  # 课程资料文档（大纲对应的详细知识点）
+    materials_error: str = ""  # 资料生成失败原因（提交时用本地兜底，仍会写出课程资料）
     tags: list[str] = field(default_factory=list)
     llm_profile: str | None = None
 
@@ -189,10 +193,9 @@ class OutlineService:
         )
         outline.course_id = draft.course_id
         draft.outline = outline
-        # 一并生成《课程资料》（失败则留空，commit 时本地兜底）
+        # 一并生成《课程资料》：失败**不阻塞建课**（commit 会用本地兜底写出文档），
+        # 但必须记下原因，别让用户以为「AI 写了资料」其实一个字都没有。
         try:
-            from ..core.models import GOAL_LABELS
-
             text = await self.director.generate_materials(
                 course_name=draft.name,
                 outline=outline,
@@ -200,10 +203,16 @@ class OutlineService:
                 goal_types=list(getattr(draft, "goal_types", []) or []),
                 cancel=cancel,
             )
+        except Exception as exc:  # noqa: BLE001 - 见上：记录但不阻塞
+            draft.materials_error = str(exc) or type(exc).__name__
+            LOGGER.warning("课程资料生成失败，提交时用本地兜底：%s", exc)
+        else:
             if text.strip():
                 draft.materials_md = text
-        except Exception:  # noqa: BLE001 - 资料生成失败不阻塞建课
-            pass
+                draft.materials_error = ""
+            else:
+                draft.materials_error = "模型没有返回课程资料内容"
+                LOGGER.warning("课程资料为空，提交时用本地兜底")
         return outline
 
     # --- 校验 -----------------------------------------------------------

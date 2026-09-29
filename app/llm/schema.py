@@ -37,7 +37,12 @@ def extract_json(text: str) -> Any:
 
     start_candidates = [index for index in (cleaned.find("{"), cleaned.find("[")) if index >= 0]
     if not start_candidates:
-        raise StructuredOutputError("模型输出里找不到 JSON")
+        head = cleaned[:160].replace("\n", " ")
+        if not head:
+            raise StructuredOutputError(
+                "模型这次没有输出任何正文（通常是 token 预算被思考占满，可在设置里调大 max_tokens）"
+            )
+        raise StructuredOutputError("模型输出里找不到 JSON", detail=f"原文开头：{head}")
     start = min(start_candidates)
     for end in range(len(cleaned), start, -1):
         candidate = cleaned[start:end].rstrip().rstrip(",")

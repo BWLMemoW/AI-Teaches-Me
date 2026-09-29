@@ -394,3 +394,65 @@ def test_4xx_ladder_is_bounded_and_then_raises() -> None:
         asyncio.run(_collect(llm, json_schema={"name": "o", "schema": {}}))
     # json_schema → json_object → 无 response_format，共 3 次，不再无限重试
     assert len(completions.calls) == 3
+
+def _chunk_fr(text: str = "", *, finish: str | None = None, reasoning: str | None = None):
+    """带 finish_reason / reasoning_content 的流片段（推理型模型的真实形态）。"""
+    delta = SimpleNamespace(content=text, reasoning_content=reasoning)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(delta=delta, finish_reason=finish)], usage=None
+    )
+
+
+def test_empty_output_escalates_max_tokens() -> None:
+    """回归：推理模型把 4096 预算全花在思考上 → 正文为空 → 以前只报「JSON 无法解析」。
+
+    现在应当自动把预算翻倍重来（一个字都没吐出来，重试不会重复文本）。
+    """
+
+    def make(count: int):
+        if count == 1:
+            return _FakeStream([_chunk_fr("", finish="length", reasoning="想了很久")])
+        return _FakeStream([_chunk("完整内容")])
+
+    llm, completions, _ = _client(make)
+    pieces = asyncio.run(_collect(llm))
+
+    assert pieces == ["完整内容"]
+    assert len(completions.calls) == 2
+    first = completions.calls[0]["max_tokens"]
+    assert completions.calls[1]["max_tokens"] == min(first * 2, 32768)
+
+
+def test_truncated_after_text_is_reported_not_retried() -> None:
+    """已经吐了半截再被截断：不整段重试（否则用户会看到重复文本），直接报明确错误。"""
+    from app.core.errors import TruncatedOutput
+
+    def make(count: int):
+        return _FakeStream([_chunk("半截 JSON"), _chunk_fr("", finish="length")])
+
+    llm, completions, _ = _client(make)
+    with pytest.raises(TruncatedOutput) as info:
+        asyncio.run(_collect(llm))
+
+    assert len(completions.calls) == 1
+    assert "max_tokens" in str(info.value)
+
+
+def test_reasoning_only_output_is_bounded_and_raises() -> None:
+    """只有思考、始终没有正文：预算最多翻倍两次，然后明确报错。"""
+    from app.core.errors import TruncatedOutput
+
+    def make(count: int):
+        return _FakeStream([_chunk_fr("", reasoning="只思考不回答")])
+
+    llm, completions, _ = _client(make)
+    with pytest.raises(TruncatedOutput):
+        asyncio.run(_collect(llm))
+
+    assert len(completions.calls) == 2  # 第一次 + 一次扩预算
+    assert completions.calls[1]["max_tokens"] > completions.calls[0]["max_tokens"]
+
+def test_max_tokens_override_is_forwarded() -> None:
+    llm, completions, _ = _client(lambda n: _FakeStream([_chunk("x")]))
+    asyncio.run(_collect(llm, max_tokens=32768))
+    assert completions.calls[0]["max_tokens"] == 32768

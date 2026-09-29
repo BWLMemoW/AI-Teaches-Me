@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
+from ..core.errors import TruncatedOutput
 from ..core.models import GOAL_LABELS, CourseOutline
 from ..llm.schema import complete_json, json_schema_of
 from .base import AgentBase, PromptAssembler
@@ -41,6 +42,9 @@ def goal_prompt_line(goal_type: str = "general", goal_types: Sequence[str] | Non
     return f"课程目标：{labels}｜{hints}"
 
 
+MATERIALS_JSON_LIMIT = 12000  # JSON 超过这个长度就改送紧凑文本大纲（不截断）
+MATERIALS_MAX_TOKENS = 32768  # 资料文档很长：一次写不完就整段重试时用的预算
+
 MATERIALS_PROMPT = (
     "请基于以下教学大纲，写一份**课程资料文档**（Markdown）。要求："
     "① 开头给课程定位、适用人群与该目标取向下最该抓住的主线；"
@@ -50,15 +54,39 @@ MATERIALS_PROMPT = (
 )
 
 
+def compact_outline_text(outline: CourseOutline) -> str:
+    """大纲的紧凑文本版：JSON 太长时用它，保证提示词里没有半截结构。"""
+    lines = [f"课程时长：约 {outline.estimated_hours} 小时"]
+    if outline.learning_goals:
+        lines.append("学习目标：" + "；".join(str(item) for item in outline.learning_goals))
+    for chapter in outline.chapters:
+        head = f"\n{chapter.id}  {chapter.title}"
+        lines.append(f"{head}：{chapter.summary}" if chapter.summary else head)
+        for lesson in chapter.lessons:
+            points = "、".join(
+                f"{point.title}（{point.difficulty}）" for point in lesson.knowledge_points
+            )
+            lines.append(f"  - {lesson.id} {lesson.title}（{lesson.estimated_minutes} 分钟）：{points}")
+    return "\n".join(lines)
+
+
 def build_materials_prompt(course_name: str, outline: CourseOutline, goal_type: str = "general", goal_types: Sequence[str] | None = None) -> str:
-    """把大纲回灌给模型，要求产出「课程资料文档」（知识点详解版）。"""
+    """把大纲回灌给模型，要求产出「课程资料文档」（知识点详解版）。
+
+    JSON 太长时**不截断**（截出来的非法 JSON 会让模型只思考不落笔），
+    改用等价的紧凑文本大纲，保证送进去的永远是完整结构。
+    """
     import json as _json
 
+    payload = _json.dumps(outline.model_dump(), ensure_ascii=False)
+    if len(payload) <= MATERIALS_JSON_LIMIT:
+        body = "【教学大纲 JSON】\n" + payload
+    else:
+        body = "【教学大纲（结构化摘要）】\n" + compact_outline_text(outline)
     return (
         f"课程名：{course_name}\n"
         + goal_prompt_line(goal_type, goal_types)
-        + "\n\n" + MATERIALS_PROMPT + "\n\n【教学大纲 JSON】\n"
-        + _json.dumps(outline.model_dump(), ensure_ascii=False)[:14000]
+        + "\n\n" + MATERIALS_PROMPT + "\n\n" + body
     )
 
 class DirectorAgent(AgentBase):
@@ -182,12 +210,24 @@ class DirectorAgent(AgentBase):
         goal_types: Sequence[str] | None = None,
         cancel: Any = None,
     ) -> str:
-        """生成《课程资料》Markdown（知识点详解）；调用方负责失败兜底。"""
+        """生成《课程资料》Markdown（知识点详解）；调用方负责失败兜底。
+
+        资料**不会边生成边给用户看**，所以被 token 上限截断时直接整段重试一次
+        （更大预算），不会产生重复文本。
+        """
         prompt = build_materials_prompt(course_name, outline, goal_type, goal_types)
-        parts: list[str] = []
-        async for piece in self.stream([{"role": "user", "content": prompt}], task="outline", cancel=cancel):
-            parts.append(piece)
-        return "".join(parts).strip()
+        messages: list[Mapping[str, Any]] = [{"role": "user", "content": prompt}]
+
+        async def collect(**kwargs: Any) -> str:
+            parts: list[str] = []
+            async for piece in self.stream(messages, task="outline", cancel=cancel, **kwargs):
+                parts.append(piece)
+            return "".join(parts).strip()
+
+        try:
+            return await collect()
+        except TruncatedOutput:
+            return await collect(max_tokens=MATERIALS_MAX_TOKENS)
     async def _refine(self, outline: CourseOutline, *, cancel: Any = None) -> CourseOutline | None:
         messages: list[Mapping[str, Any]] = [
             {"role": "user", "content": "这是当前大纲草稿，请细化它。"},

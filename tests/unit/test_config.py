@@ -163,3 +163,31 @@ def test_app_config_dump_is_json_safe() -> None:
     dumped: dict[str, object] = default_config("D:/ws").model_dump(mode="json")
     text = json.dumps(dumped, ensure_ascii=False)
     assert AppConfig.model_validate(json.loads(text)).active_profile == "deepseek-default"
+
+def test_legacy_default_max_tokens_is_bumped(tmp_path: Path) -> None:
+    """旧默认 4096 在推理模型上会把正文顶掉（实测 finish_reason=length），
+    只把「从没改过」的档案升到新默认，并落盘。"""
+    from app.core.config import DEFAULT_MAX_TOKENS, LEGACY_DEFAULT_MAX_TOKENS
+
+    config = default_config(tmp_path)
+    raw = config.model_dump(mode="json")
+    raw["llm_profiles"][0]["max_tokens"] = LEGACY_DEFAULT_MAX_TOKENS
+    path = config_file(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    loaded = load_config(tmp_path)  # 启动路径：迁移结果要落盘
+
+    assert loaded.require_profile().max_tokens == DEFAULT_MAX_TOKENS
+    assert json.loads(path.read_text(encoding="utf-8"))["llm_profiles"][0]["max_tokens"] == DEFAULT_MAX_TOKENS
+
+
+def test_customized_max_tokens_is_left_alone(tmp_path: Path) -> None:
+    config = default_config(tmp_path)
+    raw = config.model_dump(mode="json")
+    raw["llm_profiles"][0]["max_tokens"] = 8192
+    path = config_file(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    assert load_config(tmp_path, create=False).require_profile().max_tokens == 8192

@@ -31,6 +31,10 @@ DEFAULT_SECRET_REF = "atm/deepseek-default"
 DEFAULT_SEARCH_URL = "https://qianfan.baidubce.com/v2/ai_search"
 DEFAULT_SEARCH_MODEL = "ernie-4.5-turbo-128k"
 DEFAULT_SEARCH_SECRET_REF = "atm/qianfan-search"
+# 推理型模型（如 deepseek-flash）会先花几千 token 思考，旧默认 4096 会把正文顶掉，
+# 表现为「输出为空」或半截 JSON。这里记录旧值，供迁移识别「从未改过」的档案。
+LEGACY_DEFAULT_MAX_TOKENS = 4096
+DEFAULT_MAX_TOKENS = 16384
 
 # 《项目文档》§18.6 枚举速查
 THEMES: tuple[str, ...] = ("deepspace", "paper", "sakura", "forest")
@@ -84,7 +88,7 @@ class LLMProfile(BaseModel):
     vision_model: str | None = None
     embedding_model: str | None = None
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 16384
     timeout_seconds: int = 60
     proxy: str | None = None
     capabilities: Capabilities = Field(default_factory=Capabilities)
@@ -303,6 +307,29 @@ def migrate_config(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     return raw, notes
 
 
+def normalize_legacy_max_tokens(raw: dict[str, Any]) -> list[str]:
+    """把「从未改过」的旧默认 max_tokens 提升到新默认（用户改过就原样保留）。
+
+    4096 是旧默认值，也是这批推理模型的失败阈值；只动恰好等于旧默认的档案，
+    避免覆盖用户自己的调优。
+    """
+    notes: list[str] = []
+    profiles = raw.get("llm_profiles")
+    if not isinstance(profiles, list):
+        return notes
+    bumped = 0
+    for profile in profiles:
+        if isinstance(profile, dict) and profile.get("max_tokens") == LEGACY_DEFAULT_MAX_TOKENS:
+            profile["max_tokens"] = DEFAULT_MAX_TOKENS
+            bumped += 1
+    if bumped:
+        notes.append(
+            f"{bumped} 个模型档案的 max_tokens 由旧默认 {LEGACY_DEFAULT_MAX_TOKENS} "
+            f"提升到 {DEFAULT_MAX_TOKENS}（推理模型思考会占用同一份预算）"
+        )
+    return notes
+
+
 def load_config(workspace_root: str | Path, *, create: bool = True) -> AppConfig:
     """读取配置；缺失时按 ``create`` 写入默认配置。"""
     path = config_file(workspace_root)
@@ -320,11 +347,17 @@ def load_config(workspace_root: str | Path, *, create: bool = True) -> AppConfig
         raise ConfigError(f"配置文件内容必须是 JSON 对象：{path}")
 
     raw, notes = migrate_config(raw)
+    notes.extend(normalize_legacy_max_tokens(raw))
     for note in notes:
         LOGGER.info("%s", note)
     config = config_from_dict(raw)
     if not config.workspace_root:
         config.workspace_root = str(workspace_root)
+    if notes and create:
+        try:
+            save_config(workspace_root, config)  # 让迁移落盘，下次不必再算
+        except OSError as exc:  # noqa: BLE001 - 写不进去也不能拦着启动
+            LOGGER.warning("配置迁移结果写回失败：%s", exc)
     return config
 
 

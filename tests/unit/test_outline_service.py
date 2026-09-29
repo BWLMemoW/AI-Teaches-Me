@@ -214,3 +214,108 @@ def test_prompt_files_exist_for_director() -> None:
 
     assert "教学大纲" in prompt and "严格 JSON" in prompt
     assert "澄清问题" in clarify
+
+def test_materials_failure_is_recorded_and_commit_still_writes_doc(tmp_path: Path) -> None:
+    """回归：资料生成失败曾被 except: pass 静默吞掉，用户拿到空资料却不知情。"""
+    service, _client, index = _service(tmp_path, [])
+    try:
+        outline_json = _outline_payload(3, 2)
+
+        class _BoomDirector:
+            async def generate(self, **kwargs):
+                return CourseOutline.model_validate(json.loads(outline_json))
+
+            async def generate_materials(self, **kwargs):
+                raise RuntimeError("模型服务返回错误（400）")
+
+        service.director = _BoomDirector()
+        draft = service.new_draft("资料失败课")
+        outline = asyncio_run(service.generate(draft))
+
+        assert outline.total_lessons() == 6
+        assert draft.materials_md == ""
+        assert "400" in draft.materials_error  # 原因要留下来，别静默
+
+        result = service.commit(draft, outline)
+        materials = (result.course_dir / "materials" / "课程资料.md").read_text(encoding="utf-8")
+        assert materials.strip()  # 本地兜底仍要写出文档
+    finally:
+        index.close()
+
+
+def test_empty_materials_text_is_recorded(tmp_path: Path) -> None:
+    service, _client, index = _service(tmp_path, [])
+    try:
+        outline_json = _outline_payload(3, 2)
+
+        class _EmptyDirector:
+            async def generate(self, **kwargs):
+                return CourseOutline.model_validate(json.loads(outline_json))
+
+            async def generate_materials(self, **kwargs):
+                return ""
+
+        service.director = _EmptyDirector()
+        draft = service.new_draft("空资料课")
+        asyncio_run(service.generate(draft))
+
+        assert draft.materials_error == "模型没有返回课程资料内容"
+    finally:
+        index.close()
+
+
+def test_materials_prompt_keeps_valid_json_when_short() -> None:
+    from app.agents.director import build_materials_prompt
+
+    outline = CourseOutline.model_validate(json.loads(_outline_payload(1, 1)))
+    prompt = build_materials_prompt("短课", outline)
+
+    assert "【教学大纲 JSON】" in prompt
+    assert prompt.rstrip().endswith("}")  # JSON 完整闭合
+
+
+def test_materials_prompt_never_sends_truncated_json() -> None:
+    """回归：14000 字符硬截断会产生非法 JSON，模型会只思考不落笔。"""
+    from app.agents.director import MATERIALS_JSON_LIMIT, build_materials_prompt, compact_outline_text
+
+    outline = CourseOutline.model_validate(json.loads(_outline_payload(12, 6)))
+    payload = json.dumps(outline.model_dump(), ensure_ascii=False)
+    assert len(payload) > MATERIALS_JSON_LIMIT  # 前提：这份大纲确实超长
+
+    prompt = build_materials_prompt("长课", outline)
+
+    assert "结构化摘要" in prompt
+    assert payload[:MATERIALS_JSON_LIMIT] not in prompt  # 不再送半截 JSON
+    assert compact_outline_text(outline) in prompt
+    assert "第 12 章" in prompt  # 结构完整：最后一章也在
+
+def test_materials_retries_once_with_bigger_budget(tmp_path: Path) -> None:
+    """资料不流给用户，被截断时整段重试一次（预算加倍）是安全的。"""
+    from app.agents.director import MATERIALS_MAX_TOKENS, DirectorAgent
+    from app.core.errors import TruncatedOutput
+
+    outline_json = _outline_payload(3, 2)
+    outline = CourseOutline.model_validate(json.loads(outline_json))
+
+    class _TruncatingClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def stream_chat(self, messages, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                raise TruncatedOutput("模型输出被 max_tokens 截断")
+            yield "# 课程资料\n\n内容"
+
+    client = _TruncatingClient()
+    director = DirectorAgent(client)
+
+    async def run() -> str:
+        return await director.generate_materials(course_name="重试课", outline=outline)
+
+    text = asyncio_run(run())
+
+    assert text.startswith("# 课程资料")
+    assert len(client.calls) == 2
+    assert "max_tokens" not in client.calls[0]
+    assert client.calls[1]["max_tokens"] == MATERIALS_MAX_TOKENS

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..bootstrap import BootstrapResult, Services, build_services
+from ..bootstrap import BootstrapResult, Services, build_services, restore_seed_course
 from ..core.events import EventBus
 from ..services import course_service
 from .pages.library_page import LibraryPage
@@ -180,6 +180,7 @@ class MainWindow(QMainWindow):
         self.settings_page.config_saved.connect(self._on_preferences_saved)
         self.settings_page.backup_requested.connect(self._backup_library)
         self.settings_page.restore_requested.connect(self._restore_backup)
+        self.settings_page.restore_seed_requested.connect(self._restore_seed_course)
         self.settings_page.open_folder_requested.connect(self._open_folder)
         self.settings_page.status_message.connect(self.statusBar().showMessage)
 
@@ -372,6 +373,22 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(row)
         self.raise_()
         self.activateWindow()
+
+    @Slot()
+    def _restore_seed_course(self) -> None:
+        """恢复内置示例课程（§4.15：只在用户手动触发时执行；旧版进回收站）。"""
+        answer = QMessageBox.question(
+            self,
+            "恢复示例课程",
+            "将把《ATM 使用指南》恢复为内置版本；旧版会移入系统回收站（可恢复）。\n确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        written = restore_seed_course(self._result.layout)
+        self.refresh_library()
+        self.statusBar().showMessage(f"示例课程已恢复（写入 {len(written)} 个文件）", 10000)
 
     @Slot()
     def _backup_library(self) -> None:

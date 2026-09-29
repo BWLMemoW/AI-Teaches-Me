@@ -320,3 +320,25 @@ def build_services(bootstrap_result: BootstrapResult, *, store: SecretStore | No
         search=search_service,
         personas=PersonaService(user_dir=layout.personas, index=index),
     )
+def restore_seed_course(
+    layout: WorkspaceLayout,
+    *,
+    course_name: str | None = None,
+    source: str | Path | None = None,
+) -> list[Path]:
+    """恢复内置示例课程（《项目文档》§4.15：仅在设置中手动触发）。
+
+    先删除现有示例课程（走回收站，可恢复），再从随包分发的种子里重新复制一份完整课程。
+    """
+    from .core.paths import safe_component
+    from .infra import file_repository
+
+    root = Path(source) if source else seed_courses_dir()
+    names = [course_name] if course_name else list_seed_courses(root)
+    written: list[Path] = []
+    for name in names:
+        target = safe_join(layout.courses, safe_component(str(name)))
+        if target.exists():
+            file_repository.delete_to_recycle_bin(target)  # 旧版进回收站，不直接抹掉
+        written.extend(install_seed_courses(layout, source=root))
+    return written

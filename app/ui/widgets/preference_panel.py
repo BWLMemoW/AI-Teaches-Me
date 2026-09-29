@@ -91,6 +91,7 @@ class PreferencePanel(QWidget):
     backup_requested = Signal()
     restore_requested = Signal()
     open_folder_requested = Signal(str)
+    restore_seed_requested = Signal()
 
     def __init__(self, service, *, client=None, courses_dir=None, thread_pool: QThreadPool | None = None, parent=None) -> None:
         super().__init__(parent)
@@ -289,6 +290,10 @@ class PreferencePanel(QWidget):
         self.open_workspace_button = QPushButton("打开工作区")
         self.open_workspace_button.clicked.connect(lambda: self.open_folder_requested.emit(str(self._service.workspace_root)))
         row.addWidget(self.open_workspace_button)
+        self.restore_seed_button = QPushButton("恢复示例课程")
+        self.restore_seed_button.clicked.connect(self.restore_seed_requested.emit)
+        self.restore_seed_button.setToolTip("把《ATM 使用指南》恢复为内置版本（旧版移入回收站，可恢复）")
+        row.addWidget(self.restore_seed_button)
         self.open_logs_button = QPushButton("打开日志目录")
         self.open_logs_button.clicked.connect(
             lambda: self.open_folder_requested.emit(str(Path(self._service.workspace_root) / "data" / "logs"))

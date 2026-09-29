@@ -291,3 +291,71 @@ def test_created_persona_is_saved_and_listed(qtbot, tmp_path) -> None:
 
     assert (tmp_path / "personas" / "my-coach.md").exists()
     assert any(item.id == "my-coach" for item in service.list_personas())
+
+# --- M16：右键菜单与示例课程恢复 -----------------------------------------
+def test_card_right_click_does_not_open_course(qtbot, tmp_path) -> None:
+    """回归：右键曾触发 activated → 应用跳进课程，把上下文菜单顶掉。"""
+    from PySide6.QtCore import QPoint, Qt as QtConst
+    from PySide6.QtGui import QContextMenuEvent, QMouseEvent
+
+    from app.bootstrap import bootstrap_workspace
+    from app.infra.secret_store import InMemoryBackend, SecretStore
+    from app.services import course_service
+    from app.ui.widgets.course_card import CourseCard
+
+    bootstrap_workspace(tmp_path, store=SecretStore(backend=InMemoryBackend()), configure_file_logging=False)
+    summary = course_service.scan_courses(tmp_path / "Courses")[0]
+    card = CourseCard(summary)
+    qtbot.addWidget(card)
+
+    opened: list[object] = []
+    menus: list[object] = []
+    card.activated.connect(opened.append)
+    card.context_requested.connect(lambda summary_, pos: menus.append((summary_, pos)))
+
+    right = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress, QPoint(5, 5), QtConst.MouseButton.RightButton,
+        QtConst.MouseButton.RightButton, QtConst.KeyboardModifier.NoModifier,
+    )
+    card.mousePressEvent(right)
+    assert opened == []  # 右键不能打开课程
+
+    left = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress, QPoint(5, 5), QtConst.MouseButton.LeftButton,
+        QtConst.MouseButton.LeftButton, QtConst.KeyboardModifier.NoModifier,
+    )
+    card.mousePressEvent(left)
+    assert opened == [summary]
+
+    card.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(5, 5), QPoint(5, 5)))
+    assert menus and menus[0][0] is summary
+
+
+def test_restore_seed_course_rebuilds_bundle_version(tmp_path) -> None:
+    from pathlib import Path
+
+    from app.bootstrap import bootstrap_workspace, restore_seed_course
+
+    result = bootstrap_workspace(tmp_path, store=SecretStore(backend=InMemoryBackend()), configure_file_logging=False)
+    course = result.layout.courses / "ATM 使用指南"
+    target = course / "chapters" / "C1-三分钟上手" / "lessons" / "L1-1-先配置你的-AI" / "script.md"
+    target.write_text("被用户改坏了", encoding="utf-8")
+    (course / "outline.json").unlink()
+
+    written = restore_seed_course(result.layout)
+
+    assert written
+    assert target.read_text(encoding="utf-8").startswith("# 先配置你的 AI")  # 恢复成内置版本
+    assert (course / "outline.json").exists()
+    assert len(list(course.rglob("lesson.json"))) == 5
+
+
+def test_preference_panel_emits_restore_seed(qtbot, tmp_path) -> None:
+    from app.ui.widgets.preference_panel import PreferencePanel
+
+    service = _service(tmp_path)
+    panel = PreferencePanel(service, courses_dir=tmp_path / "Courses")
+    qtbot.addWidget(panel)
+
+    with qtbot.waitSignal(panel.restore_seed_requested, timeout=2000):
+        panel.restore_seed_button.click()

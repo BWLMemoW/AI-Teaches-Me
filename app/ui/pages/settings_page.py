@@ -59,6 +59,7 @@ class SettingsPage(QWidget):
     backup_requested = Signal()
     restore_requested = Signal()
     open_folder_requested = Signal(str)
+    restore_seed_requested = Signal()
     config_saved = Signal()
     status_message = Signal(str)
 
@@ -95,6 +96,7 @@ class SettingsPage(QWidget):
         self.preference_panel.backup_requested.connect(self.backup_requested.emit)
         self.preference_panel.restore_requested.connect(self.restore_requested.emit)
         self.preference_panel.open_folder_requested.connect(self.open_folder_requested.emit)
+        self.preference_panel.restore_seed_requested.connect(self.restore_seed_requested.emit)
         layout.addWidget(self.preference_panel)
         layout.addWidget(self._build_result_group())
         layout.addStretch(1)

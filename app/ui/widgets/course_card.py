@@ -194,7 +194,9 @@ class CourseCard(QFrame):
 
     # --- 交互 -----------------------------------------------------------
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt 命名
-        self.activated.emit(self.summary)
+        # 只有左键才算「打开」：否则右键会先跳进课程，把上下文菜单顶掉（曾出现的「右键没作用」）
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.activated.emit(self.summary)
         super().mousePressEvent(event)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt 命名

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QThreadPool, Qt, QUrl, Slot
+from PySide6.QtCore import QThreadPool, Qt, QTimer, QUrl, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -76,6 +76,8 @@ class MainWindow(QMainWindow):
         self._pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         self._css_vars: dict = {}
         self._first_run_shown = not show_first_run
+        # 首启引导延迟到事件循环启动后（主窗口已显示再弹，避免点在未显示的窗口上）
+        QTimer.singleShot(0, self._maybe_show_first_run)
 
         self.setWindowTitle("AI Teaches Me")
         self.resize(1220, 780)
@@ -127,7 +129,6 @@ class MainWindow(QMainWindow):
         self.refresh_library()
         self.apply_current_theme()
         self.nav.setCurrentRow(self.NAV_COURSES)
-        self._maybe_show_first_run()
 
     def _wire_signals(self) -> None:
         library = self.library_page
@@ -280,18 +281,37 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _maybe_show_first_run(self) -> None:
-        """首启动引导（未配置密钥时显示一次）。"""
+        """首启动引导（未配置密钥时显示一次）。
+
+        要点：**必须等主窗口真正显示并激活之后**再弹，否则用户点在「还没显示出来的窗口」上，
+        看起来就像「按钮没反应」。所以这里用 QTimer 延迟到事件循环启动后，并用模态 exec()。
+        """
         if not self._result.needs_api_setup or self._first_run_shown:
             return
         self._first_run_shown = True
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
         dialog = FirstRunDialog(has_seed_course=bool(self.library_page.course_list.count()), parent=self)
-        dialog.go_settings.connect(lambda: self.nav.setCurrentRow(self.NAV_SETTINGS))
-        dialog.go_new_course.connect(lambda: self.nav.setCurrentRow(self.NAV_WIZARD))
+        dialog.go_settings.connect(lambda: self._jump_to(self.NAV_SETTINGS))
+        dialog.go_new_course.connect(lambda: self._jump_to(self.NAV_WIZARD))
         dialog.go_backup.connect(self._backup_library)
         dialog.open_seed_course.connect(self._open_first_course)
-        # 非阻塞展示：不打断启动流程，也不影响自动化测试
         self._first_run_dialog = dialog
-        dialog.show()
+        dialog.exec()
+        self.raise_()
+        self.activateWindow()
+
+    def _jump_to(self, row: int) -> None:
+        """切页并确保窗口在最前面（首启引导点按钮后立刻可见）。"""
+        if not self.isVisible():
+            self.show()
+        self.nav.setCurrentRow(row)
+        self.stack.setCurrentIndex(row)
+        self.raise_()
+        self.activateWindow()
 
     @Slot()
     def _backup_library(self) -> None:
@@ -307,6 +327,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _open_first_course(self) -> None:
+        self._jump_to(self.NAV_COURSES)
         if self.library_page.course_list.count():
             self.library_page.course_list.setCurrentRow(0)
             summary = self.library_page.selected_course()

@@ -1,10 +1,11 @@
 """追问抽屉（《项目文档》§4.7 FR-07、§11.4 ``ChatDrawer``）。
 
-气泡式对话（M23 起）：
+气泡式对话：
 * 用户的追问靠右（主色浅底），老师的回答靠左（面板色底）；
-* 老师回答**按内容块渲染**：文字块走 Markdown，`svg` / `diagram(kind=svg)` / `image`
-  块会被**离屏栅格化成图片真的画出来**（纯本地，无 CDN）；
-* 模型流式吐 NDJSON → 解析成内容块 → 同一个气泡原地刷新；
+* 老师回答**按内容块增量渲染**：已完成的块一次性追加进气泡，未收完的那一行
+  只在末尾的临时标签里原地刷新——**不重建整个气泡**（否则会一闪一闪）；
+* `svg` / `diagram(kind=svg)` / `image` 块离屏栅格化成图片真的画出来，
+  **双击**任意图 → 弹出整张大图窗口；
 * 记录区只读、不可获焦；输入框在下方与发送按钮同行；支持「放大」到独立窗口。
 """
 
@@ -86,18 +87,23 @@ def html_to_plain(html: str) -> str:
     return document.toPlainText()
 
 
+def block_svg(block: Mapping[str, Any]) -> str:
+    """取出块里的内联 SVG 源码（没有就返回空串）。"""
+    kind = str(block.get("type") or "")
+    if kind == "svg":
+        return str(block.get("svg") or block.get("content") or "")
+    if kind == "diagram" and str(block.get("kind") or "svg") == "svg":
+        return str(block.get("content") or block.get("svg") or "")
+    return ""
+
+
 def block_pixmap(block: Mapping[str, Any]) -> QPixmap | None:
     """把 ``svg`` / ``diagram(kind=svg)`` / ``image`` 块变成可显示的位图。
 
     纯本地：内联 SVG 用 QtSvg 离屏栅格化并缓存（同一张图流式刷新时不再重复渲染），
     本地图片直接读文件；失败返回 ``None``，由调用方退回源码展示。
     """
-    kind = str(block.get("type") or "")
-    svg_text = ""
-    if kind == "svg":
-        svg_text = str(block.get("svg") or block.get("content") or "")
-    elif kind == "diagram" and str(block.get("kind") or "svg") == "svg":
-        svg_text = str(block.get("content") or block.get("svg") or "")
+    svg_text = block_svg(block)
     if svg_text.strip():
         key = hashlib.sha1(svg_text.encode("utf-8")).hexdigest()
         cached = _IMAGE_CACHE.get(key)
@@ -111,11 +117,11 @@ def block_pixmap(block: Mapping[str, Any]) -> QPixmap | None:
         except Exception:  # noqa: BLE001 - 渲染失败就退回源码
             return None
         pixmap = QPixmap()
-        if not pixmap.loadFromData(data, "PNG") or pixmap.isNull():
+        if not data or not pixmap.loadFromData(data, "PNG") or pixmap.isNull():
             return None
         _IMAGE_CACHE[key] = pixmap
         return pixmap
-    if kind == "image":
+    if str(block.get("type") or "") == "image":
         path = str(block.get("asset") or block.get("path") or block.get("src") or "")
         if path and Path(path).exists():
             pixmap = QPixmap(path)
@@ -139,8 +145,24 @@ class _InputBox(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
+class _ImageLabel(QLabel):
+    """可双击的图（双击 = 看整张图）。"""
+
+    doubleClicked = Signal()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+
 class _Bubble(QFrame):
-    """一个对话气泡：``role`` 为 ``user``（靠右）或 ``assistant``（靠左）。"""
+    """一个对话气泡：``role`` 为 ``user``（靠右）或 ``assistant``（靠左）。
+
+    增量渲染：``append_block`` 追加已完成的块；``set_partial`` 只刷新末尾那一行；
+    ``finish_stream`` 收掉临时行。全程**不重建已有控件**，所以不会闪。
+    """
+
+    diagram_requested = Signal(dict)
 
     def __init__(self, role: str, parent=None) -> None:
         super().__init__(parent)
@@ -154,6 +176,7 @@ class _Bubble(QFrame):
         self.markdown = ""
         self.html_parts: list[str] = []
         self._plain_parts: list[str] = []
+        self._partial_label: QLabel | None = None
 
     # --- 内容 -----------------------------------------------------------
     def clear_content(self) -> None:
@@ -164,6 +187,8 @@ class _Bubble(QFrame):
                 widget.deleteLater()
         self.html_parts = []
         self._plain_parts = []
+        self._partial_label = None
+        self.markdown = ""
 
     def _add_html(self, html: str) -> None:
         if not html.strip():
@@ -178,36 +203,78 @@ class _Bubble(QFrame):
         self.html_parts.append(html)
         self._plain_parts.append(html_to_plain(html))
 
-    def _add_image(self, pixmap: QPixmap, caption: str) -> None:
-        label = QLabel()
+    def _add_image(self, pixmap: QPixmap, caption: str, svg: str = "") -> None:
+        label = _ImageLabel()
         label.setObjectName("ChatBubbleImage")
         width = min(pixmap.width(), DIAGRAM_DISPLAY_WIDTH)
         label.setPixmap(pixmap.scaledToWidth(width, Qt.TransformationMode.SmoothTransformation))
         label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        if caption:
-            label.setToolTip(caption)
+        label.setCursor(Qt.CursorShape.PointingHandCursor)
+        label.setToolTip(f"{caption or '图示'}（双击看整张图）")
+        label.doubleClicked.connect(
+            lambda: self.diagram_requested.emit(
+                {"svg": svg, "pixmap": pixmap, "title": caption or "图示"}
+            )
+        )
         self._layout.addWidget(label)
-        self.html_parts.append(f'<p>{escape(caption or "图示")}</p>')
+        self.html_parts.append(f"<p>{escape(caption or '图示')}</p>")
         self._plain_parts.append(f"（图示：{caption}）" if caption else "（图示）")
 
+    def append_block(self, block: Mapping[str, Any]) -> None:
+        """追加一个**已完成**的内容块（先摘掉末尾的临时行，保持它在最后）。"""
+        self._detach_partial()
+        pixmap = block_pixmap(block)
+        if pixmap is not None:
+            caption = str(block.get("title") or block.get("caption") or "图示")
+            self._add_image(pixmap, caption, svg=block_svg(block))
+        else:
+            self._add_html(markdown_to_html(block_to_markdown(block)))
+        addition = block_to_markdown(block).strip()
+        if addition:
+            self.markdown = (self.markdown + "\n\n" + addition).strip() if self.markdown else addition
+        self._attach_partial()
+
     def set_markdown(self, markdown: str) -> None:
-        """纯 Markdown（用户提问、历史记录里的 md）：整块渲染。"""
-        self.markdown = str(markdown or "")
+        """整块 Markdown（用户提问、历史记录里的 md、协议错乱回退）。"""
         self.clear_content()
+        self.markdown = str(markdown or "")
         self._add_html(markdown_to_html(self.markdown))
 
     def set_blocks(self, blocks: Sequence[Mapping[str, Any]]) -> None:
-        """按内容块渲染：SVG / 图片块画成图，其余走 Markdown。"""
-        self.markdown = blocks_to_markdown(blocks)
         self.clear_content()
         for block in blocks:
-            pixmap = block_pixmap(block)
-            if pixmap is not None:
-                caption = str(block.get("title") or block.get("caption") or "图示")
-                self._add_image(pixmap, caption)
-                continue
-            self._add_html(markdown_to_html(block_to_markdown(block)))
+            self.append_block(block)
+
+    # --- 流式临时行 -----------------------------------------------------
+    def set_partial(self, text: str) -> None:
+        """末尾的「还没收完那一行」：原地刷新同一个标签，不重建控件。"""
+        clean_text = str(text or "")
+        if self._partial_label is None:
+            label = QLabel()
+            label.setObjectName("ChatBubbleText")
+            label.setProperty("role", "muted")
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setWordWrap(True)
+            label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            self._partial_label = label
+            self._layout.addWidget(label)
+        self._partial_label.setVisible(bool(clean_text.strip()))
+        self._partial_label.setText(markdown_to_html(clean_text) if clean_text.strip() else "")
+
+    def finish_stream(self) -> None:
+        if self._partial_label is not None:
+            self._layout.removeWidget(self._partial_label)
+            self._partial_label.deleteLater()
+            self._partial_label = None
+
+    def _detach_partial(self) -> None:
+        if self._partial_label is not None:
+            self._layout.removeWidget(self._partial_label)
+
+    def _attach_partial(self) -> None:
+        if self._partial_label is not None:
+            self._layout.addWidget(self._partial_label)
 
     def to_plain_text(self) -> str:
         return "\n".join(part for part in self._plain_parts if part)
@@ -215,6 +282,8 @@ class _Bubble(QFrame):
 
 class ChatHistoryView(QScrollArea):
     """气泡记录区：只读、不可获焦，仅用于展示。"""
+
+    diagram_requested = Signal(dict)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -248,6 +317,7 @@ class ChatHistoryView(QScrollArea):
         blocks: Sequence[Mapping[str, Any]] | None = None,
     ) -> _Bubble:
         bubble = _Bubble(role)
+        bubble.diagram_requested.connect(self.diagram_requested)
         if blocks is not None:
             bubble.set_blocks(blocks)
         else:
@@ -316,6 +386,7 @@ class ChatDrawer(QWidget):
     send_requested = Signal(str, str)  # (问题, 选中片段)
     stop_requested = Signal()
     zoom_requested = Signal()
+    diagram_requested = Signal(dict)  # {svg|pixmap, title}：双击图看整张
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -331,6 +402,7 @@ class ChatDrawer(QWidget):
         layout.addWidget(self.history_label)
 
         self.history = ChatHistoryView()
+        self.history.diagram_requested.connect(self.diagram_requested)
         self.history.setMinimumHeight(240)
         layout.addWidget(self.history, 1)
 
@@ -371,6 +443,7 @@ class ChatDrawer(QWidget):
         # 流式回答状态
         self._parser = BlockStreamParser()
         self._current_bubble: _Bubble | None = None
+        self._rendered_blocks = 0
 
     # --- 加载与写入 -----------------------------------------------------
     selection = ""
@@ -387,45 +460,52 @@ class ChatDrawer(QWidget):
         self.history.clear_bubbles()
         self._parser = BlockStreamParser()
         self._current_bubble = None
+        self._rendered_blocks = 0
 
     def append_user(self, text: str) -> None:
         self.history.add_bubble("user", str(text))
 
     def begin_answer(self) -> None:
-        """开始一段回答：新建一个左侧气泡，后续流式内容原地更新它。"""
+        """开始一段回答：新建一个左侧气泡，后续内容增量追加进去。"""
         self._parser = BlockStreamParser()
-        self._current_bubble = self.history.add_bubble("assistant", "（正在思考…）")
+        self._rendered_blocks = 0
+        self._current_bubble = self.history.add_bubble("assistant", "")
+        self._current_bubble.set_partial("（正在思考…）")
 
     def feed_answer_piece(self, piece: str) -> None:
-        """流式喂入 NDJSON 片段：每解析出一个内容块就刷新一次气泡。"""
+        """流式喂入 NDJSON 片段：新块追加、未收完的一行原地刷新。"""
         self._parser.feed(piece)
         self._refresh_current_bubble()
 
     def end_answer(self) -> None:
         self._parser.finish()
         self._refresh_current_bubble()
-        if self._parser.protocol_broken:
-            fallback = self._parser.fallback_markdown()
-            if self._current_bubble is not None and fallback.strip():
-                self._current_bubble.set_markdown(fallback)
-        if self._current_bubble is not None and not self._current_bubble.markdown.strip():
-            self._current_bubble.set_markdown("（没有拿到内容，请重试一次。）")
+        bubble = self._current_bubble
+        if bubble is not None:
+            if self._parser.protocol_broken:
+                fallback = self._parser.fallback_markdown()
+                if fallback.strip():
+                    bubble.set_markdown(fallback)
+            bubble.finish_stream()
+            if not bubble.markdown.strip():
+                bubble.set_markdown("（没有拿到内容，请重试一次。）")
         self._current_bubble = None
         self.history.scroll_to_bottom()
 
     def _refresh_current_bubble(self) -> None:
-        if self._current_bubble is None:
+        """只做增量：把新完成的块追加进去，其余原地刷新（避免整块重建导致闪烁）。"""
+        bubble = self._current_bubble
+        if bubble is None:
             return
         blocks = list(self._parser.blocks)
-        if blocks:
-            self._current_bubble.set_blocks(blocks)
+        new_blocks = blocks[self._rendered_blocks :]
+        if new_blocks:
+            for block in new_blocks:
+                bubble.append_block(block)
+            self._rendered_blocks = len(blocks)
             self.history._apply_bubble_width()
-            self.history.scroll_to_bottom()
-            return
-        partial = self._parser.partial_text()
-        if partial:
-            self._current_bubble.set_markdown(partial)
-            self.history.scroll_to_bottom()
+        bubble.set_partial(self._parser.partial_text() or "")
+        self.history.scroll_to_bottom()
 
     def append_stream(self, piece: str) -> None:  # 兼容旧调用
         self.feed_answer_piece(piece)

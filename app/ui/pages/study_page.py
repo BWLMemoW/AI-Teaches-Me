@@ -304,6 +304,7 @@ class StudyPage(QWidget):
         self.chat_drawer.send_requested.connect(self.ask)
         self.chat_drawer.stop_requested.connect(self._on_stop)
         self.chat_drawer.zoom_requested.connect(self._open_chat_window)
+        self.chat_drawer.diagram_requested.connect(self._open_diagram)
         splitter.addWidget(self.chat_drawer)
         splitter.setSizes([260, 640, 440])  # 右栏加宽：追问要渲染 Markdown/代码块
         layout.addWidget(splitter, 1)
@@ -612,6 +613,24 @@ class StudyPage(QWidget):
             self.status_message.emit("还没有追问记录，先问一个问题吧")
             return
         DocumentViewerDialog(text=markdown_text, title="追问记录", parent=self).exec()
+
+    # --- 图示放大（双击图） ----------------------------------------------
+    @Slot(dict)
+    def _open_diagram(self, payload: dict) -> None:
+        """双击追问气泡里的图 → 弹窗完整呈现整张图。"""
+        from ..widgets.diagram_dialog import DiagramDialog
+
+        dialog = DiagramDialog(
+            svg=str(payload.get("svg") or "") or None,
+            pixmap=payload.get("pixmap"),
+            title=str(payload.get("title") or "图示"),
+            parent=self,
+        )
+        if not dialog.loaded():
+            self.status_message.emit("这张图没能渲染出来，正文里保留了源码")
+            dialog.deleteLater()
+            return
+        dialog.exec()
 
     def refresh_latest(self) -> None:
         """点「查最新」：检索时效性信息，命中则渲染 ref(web) 卡片（§4.19）。"""

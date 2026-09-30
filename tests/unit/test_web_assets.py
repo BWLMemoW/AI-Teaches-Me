@@ -106,3 +106,18 @@ def test_renderer_refuses_remote_images() -> None:
 
     assert "safeLocalUrl" in text
     assert "图片来源被拒绝" in text
+
+def test_renderer_supports_diagram_lightbox() -> None:
+    """双击讲义里的 SVG → 全屏浮层看整张图（离线实现）。"""
+    text = (WEB_DIR / "renderer.js").read_text(encoding="utf-8")
+
+    assert "openDiagramLightbox" in text
+    assert 'addEventListener("dblclick"' in text
+    assert "双击看整张图" in text
+
+
+def test_lesson_html_styles_diagram_lightbox() -> None:
+    text = (WEB_DIR / "lesson.html").read_text(encoding="utf-8")
+
+    assert ".atm-lightbox-host" in text
+    assert ".atm-lightbox-caption" in text

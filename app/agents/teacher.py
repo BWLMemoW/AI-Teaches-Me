@@ -125,6 +125,7 @@ class TeacherAgent(AgentBase):
         lesson_id: str | None = None,
         course_id: str | None = None,
         temperature: float | None = None,
+        max_tokens: int | None = None,
         **extra: Any,
     ) -> AsyncIterator[str]:
         system = self.system_prompt(persona_body=persona_body, depth=depth)
@@ -133,6 +134,7 @@ class TeacherAgent(AgentBase):
             "task": "teach",
             "model": model,
             "temperature": temperature,
+            "max_tokens": max_tokens,
             "lesson_id": lesson_id,
             "course_id": course_id,
             "agent": self.name,

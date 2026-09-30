@@ -222,6 +222,35 @@
     overlay.addEventListener("click", function () { overlay.remove(); });
     document.body.appendChild(overlay);
   }
+
+  /* --- 图示灯箱（双击放大：SVG 克隆到浮层，按屏幕尽量放大，可滚动看整张图） --- */
+  function openDiagramLightbox(svgMarkup, title) {
+    var overlay = document.createElement("div");
+    overlay.className = "atm-lightbox atm-lightbox-diagram";
+    var host = document.createElement("div");
+    host.className = "atm-lightbox-host";
+    host.innerHTML = stripDangerousMarkup(svgMarkup || "");
+    var svg = host.querySelector("svg");
+    if (!svg) { return; }
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.style.width = "min(94vw, 1600px)";
+    svg.style.height = "auto";
+    svg.style.maxHeight = "84vh";
+    svg.style.background = "#FFFFFF";
+    svg.style.borderRadius = "12px";
+    svg.style.padding = "14px";
+    if (title) { host.appendChild(el("div", "atm-lightbox-caption", escapeHtml(String(title)))); }
+    var hint = el("div", "atm-lightbox-caption", "点击任意处或按 Esc 关闭");
+    host.appendChild(hint);
+    overlay.appendChild(host);
+    overlay.addEventListener("click", function () { overlay.remove(); });
+    document.addEventListener("keydown", function onKey(event) {
+      if (event.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", onKey); }
+    });
+    document.body.appendChild(overlay);
+  }
   function renderMeta(block) {
     state.meta = {
       lesson_id: block.lesson_id || null,
@@ -372,6 +401,14 @@
       var host = document.createElement("div");
       host.innerHTML = stripDangerousMarkup(block.svg || "");
       target.appendChild(host);
+      var svgNode = host.querySelector("svg");
+      if (svgNode) {
+        target.style.cursor = "zoom-in";
+        target.title = "双击看整张图";
+        target.addEventListener("dblclick", function () {
+          openDiagramLightbox(svgNode.outerHTML, block.title || block.caption || "");
+        });
+      }
     };
     if (block.svg && heavyBlockShouldDefer()) {
       node.classList.add("atm-deferred");
@@ -386,6 +423,7 @@
     if (kind === "svg") { return renderSvg({ svg: block.content, title: block.title }); }
     var node = el("section", "atm-block");
     node.appendChild(el("div", "atm-lang", escapeHtml(String(kind))));
+    node.appendChild(el("div", "atm-placeholder", "（本地离线渲染暂不支持 " + escapeHtml(String(kind)) + "，先展示源码）"));
     var pre = el("pre", "atm-code");
     var code = el("code");
     code.innerHTML = escapeHtml(block.content || "");

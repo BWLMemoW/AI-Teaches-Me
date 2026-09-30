@@ -283,6 +283,11 @@ def append_block(lesson_dir: str | Path, block: dict) -> None:
     atomic_write_text(directory / "script.md", render_script_markdown(lesson, blocks))
 
 
+# 讲义是长文（五段式 + 图示 + 例子），实测 16384 会被截断；这里给足预算，
+# 追问等短任务仍用档案自己的 max_tokens。
+LESSON_MAX_TOKENS = 32768
+
+
 async def generate_script(
     lesson_dir: str | Path,
     *,
@@ -320,6 +325,7 @@ async def generate_script(
             cancel=cancel,
             executor=executor,
             tools=tools,
+            max_tokens=LESSON_MAX_TOKENS,
             persona_body=persona_body,
             depth=depth,
             model=model,

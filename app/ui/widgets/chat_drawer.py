@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -387,6 +388,10 @@ class ChatDrawer(QWidget):
     stop_requested = Signal()
     zoom_requested = Signal()
     diagram_requested = Signal(dict)  # {svg|pixmap, title}：双击图看整张
+    session_changed = Signal(str)  # 切换会话
+    new_session_requested = Signal()
+    rename_session_requested = Signal(str)
+    delete_session_requested = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -395,6 +400,36 @@ class ChatDrawer(QWidget):
         title = QLabel("追问")
         title.setProperty("role", "subtitle")
         layout.addWidget(title)
+
+        # 会话：每个小节可以有多个追问会话（M27）
+        session_row = QHBoxLayout()
+        session_row.setSpacing(6)
+        session_label = QLabel("会话")
+        session_label.setProperty("role", "muted")
+        session_row.addWidget(session_label)
+        self.session_combo = QComboBox()
+        self.session_combo.setMinimumWidth(150)
+        self.session_combo.setToolTip("切换这个小节的追问会话")
+        self.session_combo.currentIndexChanged.connect(self._on_session_picked)
+        session_row.addWidget(self.session_combo, 1)
+        self.new_session_button = QPushButton("＋ 新建会话")
+        self.new_session_button.setProperty("role", "primary")
+        self.new_session_button.setToolTip("开一个全新的追问会话，互不串上下文")
+        self.new_session_button.clicked.connect(self.new_session_requested.emit)
+        session_row.addWidget(self.new_session_button)
+        self.rename_session_button = QPushButton("重命名")
+        self.rename_session_button.setProperty("role", "ghost")
+        self.rename_session_button.clicked.connect(
+            lambda: self.rename_session_requested.emit(self.current_session_id())
+        )
+        session_row.addWidget(self.rename_session_button)
+        self.delete_session_button = QPushButton("删除")
+        self.delete_session_button.setProperty("role", "ghost")
+        self.delete_session_button.clicked.connect(
+            lambda: self.delete_session_requested.emit(self.current_session_id())
+        )
+        session_row.addWidget(self.delete_session_button)
+        layout.addLayout(session_row)
 
         self.history_label = QLabel("对话记录（只读；这里只展示，不能输入）")
         self.history_label.setProperty("role", "muted")
@@ -451,6 +486,30 @@ class ChatDrawer(QWidget):
     def focus_input(self) -> None:
         """把焦点给输入框（打开小节时调用）。"""
         self.input_edit.setFocus()
+
+    # --- 会话 -----------------------------------------------------------
+    def set_sessions(self, sessions: list[dict], *, current: str = "") -> None:
+        """填充会话下拉（静默切换，不触发 session_changed）。"""
+        self.session_combo.blockSignals(True)
+        self.session_combo.clear()
+        for item in sessions:
+            self.session_combo.addItem(
+                str(item.get("title") or "新会话"), str(item.get("id") or "")
+            )
+        index = self.session_combo.findData(current)
+        if index < 0 and self.session_combo.count():
+            index = self.session_combo.count() - 1
+        if index >= 0:
+            self.session_combo.setCurrentIndex(index)
+        self.session_combo.blockSignals(False)
+
+    def current_session_id(self) -> str:
+        return str(self.session_combo.currentData() or "")
+
+    def _on_session_picked(self, _index: int) -> None:
+        session_id = self.current_session_id()
+        if session_id:
+            self.session_changed.emit(session_id)
 
     def set_selection(self, text: str) -> None:
         self.selection = text

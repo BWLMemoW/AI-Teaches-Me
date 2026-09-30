@@ -16,7 +16,9 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -301,10 +303,15 @@ class StudyPage(QWidget):
         splitter.addWidget(self.lesson_tree)
         splitter.addWidget(self._renderer.widget())
         self.chat_drawer = ChatDrawer()
+        self._chat_session_id = ""
         self.chat_drawer.send_requested.connect(self.ask)
         self.chat_drawer.stop_requested.connect(self._on_stop)
         self.chat_drawer.zoom_requested.connect(self._open_chat_window)
         self.chat_drawer.diagram_requested.connect(self._open_diagram)
+        self.chat_drawer.session_changed.connect(self._on_chat_session_changed)
+        self.chat_drawer.new_session_requested.connect(self._on_new_chat_session)
+        self.chat_drawer.rename_session_requested.connect(self._on_rename_chat_session)
+        self.chat_drawer.delete_session_requested.connect(self._on_delete_chat_session)
         splitter.addWidget(self.chat_drawer)
         splitter.setSizes([260, 640, 440])  # 右栏加宽：追问要渲染 Markdown/代码块
         layout.addWidget(splitter, 1)
@@ -362,7 +369,7 @@ class StudyPage(QWidget):
         self._load_favorite_state(content)
         self._sync_depth(content)
         self._sync_persona(content)
-        self.chat_drawer.load_records(lesson_service.load_chat(self._lesson_dir))
+        self._refresh_chat_sessions()
         focus = getattr(self.chat_drawer, "focus_input", None)
         if callable(focus):
             focus()
@@ -522,6 +529,7 @@ class StudyPage(QWidget):
                 cancel=token,
                 executor=executor,
                 tools=tools,
+                session_id=self._chat_session_id or None,
             )
 
         self._mode = "ask"
@@ -613,6 +621,74 @@ class StudyPage(QWidget):
             self.status_message.emit("还没有追问记录，先问一个问题吧")
             return
         DocumentViewerDialog(text=markdown_text, title="追问记录", parent=self).exec()
+
+    # --- 追问会话（每个小节可以有多个会话） -------------------------------
+    def _refresh_chat_sessions(self, *, keep_current: bool = False) -> None:
+        """刷新会话下拉；keep_current=True 时保持当前选中（只看标题变化）。"""
+        if self._lesson_dir is None:
+            return
+        if not lesson_service.chat_sessions(self._lesson_dir):
+            lesson_service.ensure_chat_session(self._lesson_dir)
+        sessions = lesson_service.chat_sessions(self._lesson_dir)
+        if not sessions:
+            return
+        wanted = self._chat_session_id if keep_current else ""
+        if not wanted or not any(item["id"] == wanted for item in sessions):
+            wanted = lesson_service.latest_chat_session_id(self._lesson_dir)
+        self._chat_session_id = wanted
+        self.chat_drawer.set_sessions(sessions, current=wanted)
+        self.chat_drawer.load_records(
+            lesson_service.load_chat(self._lesson_dir, session_id=wanted)
+        )
+
+    @Slot(str)
+    def _on_chat_session_changed(self, session_id: str) -> None:
+        if self._lesson_dir is None or not session_id:
+            return
+        self._chat_session_id = session_id
+        self.chat_drawer.load_records(
+            lesson_service.load_chat(self._lesson_dir, session_id=session_id)
+        )
+        self.chat_drawer.focus_input()
+        self.status_message.emit("已切换追问会话")
+
+    @Slot()
+    def _on_new_chat_session(self) -> None:
+        """一键新建追问会话：独立上下文，互不串味。"""
+        if self._lesson_dir is None:
+            self.status_message.emit("请先在课程库里打开一门课程")
+            return
+        session = lesson_service.create_chat_session(self._lesson_dir)
+        self._chat_session_id = session["id"]
+        self._refresh_chat_sessions(keep_current=True)
+        self.chat_drawer.focus_input()
+        self.status_message.emit("已新建追问会话")
+
+    @Slot(str)
+    def _on_rename_chat_session(self, session_id: str) -> None:
+        if self._lesson_dir is None or not session_id:
+            return
+        current = next(
+            (item["title"] for item in lesson_service.chat_sessions(self._lesson_dir) if item["id"] == session_id),
+            "",
+        )
+        title, ok = QInputDialog.getText(self, "重命名会话", "会话名称：", text=current)
+        if not ok or not title.strip():
+            return
+        lesson_service.rename_chat_session(self._lesson_dir, session_id, title.strip())
+        self._refresh_chat_sessions(keep_current=True)
+
+    @Slot(str)
+    def _on_delete_chat_session(self, session_id: str) -> None:
+        if self._lesson_dir is None or not session_id:
+            return
+        answer = QMessageBox.question(self, "删除会话", "确定删除这个追问会话吗？（记录会保留在文件里，只是不再显示）")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        lesson_service.delete_chat_session(self._lesson_dir, session_id)
+        self._chat_session_id = ""
+        self._refresh_chat_sessions()
+        self.status_message.emit("已删除追问会话")
 
     # --- 图示放大（双击图） ----------------------------------------------
     @Slot(dict)
@@ -720,6 +796,7 @@ class StudyPage(QWidget):
             return
         if mode == "ask":
             self.chat_drawer.append_assistant_end()
+            self._refresh_chat_sessions(keep_current=True)  # 首问会自动命名会话
             self.status_message.emit("追问完成（已写入 chat.jsonl）")
             return
         if self.last_content is not None and self._lesson_dir is not None:

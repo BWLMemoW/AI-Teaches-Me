@@ -7,6 +7,7 @@ UI 只拿结果。本模块**不导入 Qt**。
 from __future__ import annotations
 
 import json
+import secrets
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -416,18 +417,158 @@ def _bump_version(lesson_dir: Path, *, model: str, reason: str, depth: str) -> d
     return lesson
 
 
-# --- 追问（§3.6 chat.jsonl 追加写） ---------------------------------------
-def append_chat_turn(lesson_dir: str | Path, record: dict) -> Path:
-    directory = Path(lesson_dir)
-    record = {"ts": now_iso(), **record}
-    return append_jsonl(directory / "chat.jsonl", record)
+# --- 追问（§3.6 chat.jsonl 追加写；M27 起支持「一课多会话」） --------------
+CHAT_FILE_NAME = "chat.jsonl"
+SESSION_KIND = "session"
+LEGACY_SESSION_ID = "chat-legacy"
+DEFAULT_SESSION_TITLE = "新会话"
 
 
-def load_chat(lesson_dir: str | Path) -> list[dict]:
-    path = Path(lesson_dir) / "chat.jsonl"
+def new_chat_session_id() -> str:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"chat-{stamp}-{secrets.token_hex(2)}"
+
+
+def _chat_records(lesson_dir: str | Path) -> list[dict]:
+    """读原始行（含会话标记行）。坏行跳过，避免一行脏数据毁掉整段记录。"""
+    path = Path(lesson_dir) / CHAT_FILE_NAME
     if not path.exists():
         return []
-    return [json.loads(line) for line in read_text(path).splitlines() if line.strip()]
+    records: list[dict] = []
+    for line in read_text(path).splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(item, dict):
+            records.append(item)
+    return records
+
+
+def chat_sessions(lesson_dir: str | Path) -> list[dict[str, Any]]:
+    """本小节的会话列表（按出现顺序，后出现的同名会话覆盖标题）。
+
+    * 会话行：``{"kind":"session","id":…,"title":…,"created_at":…}``
+    * 删除标记：``{"kind":"session","id":…,"deleted":true}``（追加写，不物理删）
+    * 老版本只有消息行的 ``chat.jsonl`` → 合成一个「历史追问」会话，保证不丢记录
+    """
+    sessions: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    legacy_messages = 0
+    for record in _chat_records(lesson_dir):
+        if record.get("kind") == SESSION_KIND and record.get("id"):
+            session_id = str(record["id"])
+            if record.get("deleted"):
+                sessions.pop(session_id, None)
+                if session_id in order:
+                    order.remove(session_id)
+                continue
+            if session_id not in sessions:
+                order.append(session_id)
+            sessions[session_id] = {
+                "id": session_id,
+                "title": str(record.get("title") or DEFAULT_SESSION_TITLE),
+                "created_at": str(record.get("created_at") or ""),
+            }
+            continue
+        if record.get("role"):
+            if not str(record.get("session") or ""):
+                legacy_messages += 1
+    if legacy_messages and LEGACY_SESSION_ID not in sessions:
+        order.insert(0, LEGACY_SESSION_ID)
+        sessions[LEGACY_SESSION_ID] = {
+            "id": LEGACY_SESSION_ID,
+            "title": "历史追问",
+            "created_at": "",
+        }
+    return [sessions[session_id] for session_id in order]
+
+
+def create_chat_session(
+    lesson_dir: str | Path, *, title: str = DEFAULT_SESSION_TITLE, session_id: str | None = None
+) -> dict[str, Any]:
+    """新建一个追问会话（追加一行会话记录）。"""
+    directory = Path(lesson_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    session = {
+        "id": session_id or new_chat_session_id(),
+        "title": title or DEFAULT_SESSION_TITLE,
+        "created_at": now_iso(),
+    }
+    append_jsonl(directory / CHAT_FILE_NAME, {"kind": SESSION_KIND, **session})
+    return session
+
+
+def rename_chat_session(lesson_dir: str | Path, session_id: str, title: str) -> None:
+    """改名同样是追加写：后出现的同名会话记录覆盖标题。"""
+    create_chat_session(lesson_dir, title=title, session_id=session_id)
+
+
+def delete_chat_session(lesson_dir: str | Path, session_id: str) -> None:
+    """删除 = 追加一条删除标记（chat.jsonl 保持只追加，不物理改写）。"""
+    append_jsonl(
+        Path(lesson_dir) / CHAT_FILE_NAME,
+        {"kind": SESSION_KIND, "id": str(session_id), "deleted": True, "ts": now_iso()},
+    )
+
+
+def latest_chat_session_id(lesson_dir: str | Path) -> str:
+    sessions = chat_sessions(lesson_dir)
+    return sessions[-1]["id"] if sessions else ""
+
+
+def ensure_chat_session(lesson_dir: str | Path) -> dict[str, Any]:
+    """取最近一个会话；一个都没有就建一个（打开小节即可直接问）。"""
+    sessions = chat_sessions(lesson_dir)
+    if sessions:
+        return sessions[-1]
+    return create_chat_session(lesson_dir)
+
+
+def append_chat_turn(lesson_dir: str | Path, record: dict, *, session_id: str | None = None) -> Path:
+    directory = Path(lesson_dir)
+    payload = {"ts": now_iso(), **record}
+    if session_id:
+        payload.setdefault("session", session_id)
+    path = append_jsonl(directory / CHAT_FILE_NAME, payload)
+    # 第一条提问自动给会话起个名字（仍用追加写，覆盖同一 id 的标题）
+    if session_id and record.get("role") == "user":
+        sessions = {item["id"]: item for item in chat_sessions(directory)}
+        current = sessions.get(session_id)
+        if current is not None and current["title"] == DEFAULT_SESSION_TITLE:
+            text = str(record.get("text") or "").strip().replace("\n", " ")
+            if text:
+                rename_chat_session(directory, session_id, text[:18] + ("…" if len(text) > 18 else ""))
+    return path
+
+
+def load_chat(lesson_dir: str | Path, *, session_id: str | None = None) -> list[dict]:
+    """读追问消息（不含会话标记行）。``session_id=None`` 时返回所有会话的消息。"""
+    records = _chat_records(lesson_dir)
+    if session_id and session_id != LEGACY_SESSION_ID:
+        removed = {
+            str(item.get("id"))
+            for item in records
+            if item.get("kind") == SESSION_KIND and item.get("deleted") and item.get("id")
+        }
+        if session_id in removed:
+            return []  # 已删除的会话：界面不再展示（原始记录仍留在文件里）
+    messages: list[dict] = []
+    for record in records:
+        if record.get("kind") == SESSION_KIND or not record.get("role"):
+            continue
+        if session_id is None:
+            messages.append(record)
+            continue
+        record_session = str(record.get("session") or "")
+        if session_id == LEGACY_SESSION_ID:
+            if not record_session:
+                messages.append(record)
+        elif record_session == session_id:
+            messages.append(record)
+    return messages
 
 
 def build_ask_refs(context: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -472,6 +613,7 @@ async def ask_question(
     course_id: str | None = None,
     qa: Any = None,
     persona_name: str | None = None,
+    session_id: str | None = None,
 ) -> AsyncIterator[str]:
     """小节内追问：携带小节上下文与选中片段，回答流式产出并追加写 ``chat.jsonl``。
 
@@ -480,13 +622,18 @@ async def ask_question(
     再讲一遍（真实 bug）。没有 qa 时退回教师的补丁版提示词（会读 ``ask``）。
     """
     directory = Path(lesson_dir)
+    session_id = session_id or ensure_chat_session(directory)["id"]
+    # 历史答疑（含模型回答）只取**本会话**、且在写入本次提问**之前**取，供承接语气
+    history = [
+        record
+        for record in load_chat(directory, session_id=session_id)
+        if record.get("text") or record.get("md")
+    ]
     append_chat_turn(
         directory,
         {"role": "user", "text": question, "selection": selection or None},
+        session_id=session_id,
     )
-    # 历史答疑（含模型回答）供承接语气；最后一条就是刚写入的这次提问，要排除
-    previous = load_chat(directory)
-    history = [record for record in previous[:-1] if record.get("text") or record.get("md")]
     collected: list[str] = []
     if qa is not None:
         stream_iter = qa.answer(
@@ -530,4 +677,5 @@ async def ask_question(
     append_chat_turn(
         directory,
         {"role": "assistant", "blocks": len(blocks), "tokens": len(text) // 4, "md": text},
+        session_id=session_id,
     )

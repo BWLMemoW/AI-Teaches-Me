@@ -112,6 +112,10 @@ class SettingsService:
     def set_font_size(self, size: int) -> None:
         self._config.ui.font_size = max(12, min(24, int(size)))
 
+    def set_ask_reference_when_missing(self, value: bool) -> None:
+        """未指定参考课件时要不要先提醒一次（生成讲义入口的那个确认框）。"""
+        self._config.generation.ask_reference_when_missing = bool(value)
+
     # --- 密钥 -----------------------------------------------------------
     def set_api_key(self, profile_name: str | None, value: str) -> str:
         """写入密钥到系统凭据库（不落明文），返回打码后的展示串。"""

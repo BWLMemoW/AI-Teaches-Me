@@ -15,12 +15,12 @@ from .tokens import ColorTokens, Theme
 NEUTRAL_LIGHT = dict(
     bg="#F7F7F9", bg_soft="#F1F1F4", surface="#FFFFFF", surface_alt="#F4F4F7",
     text="#1F2328", text_dim="#57606A", text_muted="#8B949E", border="#E4E4E8",
-    code_bg="#F6F8FA",
+    code_bg="#E8EDF5",
 )
 NEUTRAL_DARK = dict(
     bg="#15171C", bg_soft="#1B1E24", surface="#20242B", surface_alt="#262B33",
     text="#E6E8EC", text_dim="#B6BCC6", text_muted="#8B93A1", border="#2E343D",
-    code_bg="#1B1E24",
+    code_bg="#0B0E13",
 )
 
 

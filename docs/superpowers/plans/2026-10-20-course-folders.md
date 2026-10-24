@@ -68,7 +68,6 @@ Run: `python -m pytest tests/unit/test_library_folders.py tests/unit/test_librar
 
 **Files:**
 - Create: `app/ui/widgets/folder_tree.py`
-- Create: `app/ui/widgets/folder_card.py`
 - Modify: `app/ui/pages/library_page.py`
 - Test: `tests/unit/test_ui_folders.py`
 
@@ -80,7 +79,7 @@ Run: `python -m pytest tests/unit/test_ui_folders.py -q`
 
 - [ ] **Step 3: Implement `FolderTree` with 全部课程 / 未分类 / nested nodes and context signals**
 
-- [ ] **Step 4: Implement `FolderCard` and page split layout**
+- [ ] **Step 4: Implement page split layout; keep subfolders only in the left tree**
 
 - [ ] **Step 5: Implement breadcrumb, navigate, back, up, grid/list folder rows**
 

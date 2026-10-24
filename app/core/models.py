@@ -48,6 +48,7 @@ GOAL_LABELS: dict[str, str] = {
 }
 
 Depth = Literal["minimal", "standard", "deep"]
+LessonDepth = Literal["inherit", "minimal", "standard", "deep"]
 Difficulty = Literal["beginner", "intermediate", "advanced"]
 TriState = Literal["inherit", "on", "off"]
 
@@ -90,6 +91,8 @@ class OutlineChapter(Base):
     id: str
     title: str
     summary: str = ""
+    #: 本章默认参考的资料（小节没单独指定时继承）；格式同 ``source_refs``
+    source_refs: list[str] = Field(default_factory=list)
     lessons: list[OutlineLesson] = Field(default_factory=list)
 
 
@@ -255,7 +258,7 @@ class LessonMeta(Base):
     id: str
     title: str
     status: Literal["not_started", "in_progress", "completed", "review_needed"] = "not_started"
-    depth: Depth = "standard"
+    depth: LessonDepth = "inherit"
     assessment: LessonAssessment = Field(default_factory=LessonAssessment)
     current_version: int = 1
     versions: list[LessonVersion] = Field(default_factory=list)

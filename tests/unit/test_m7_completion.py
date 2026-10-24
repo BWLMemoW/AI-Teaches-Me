@@ -53,8 +53,10 @@ def test_registry_exposes_full_tool_table() -> None:
         "search_materials", "read_material_slice", "read_outline", "get_lesson_kps", "read_image",
         "gen_svg", "render_svg", "review_svg_image", "refine_svg", "gen_animation",
         "cite_from_lesson", "get_progress", "save_note", "make_notes", "make_quiz", "web_search",
+        # M32：确定性视觉工具（函数绘图 + 三维简单建模）
+        "plot_function", "model_3d",
     } <= names
-    assert len(names) == 16
+    assert len(names) == 18
 
 
 def test_persona_whitelist_limits_tool_schemas() -> None:

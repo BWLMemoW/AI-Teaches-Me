@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -38,6 +39,73 @@ def test_create_sessions_and_isolate_messages(tmp_path: Path) -> None:
     assert [item["text"] for item in b_messages] == ["B 问题"]
     # 不带 session_id 时仍然能拿到全部消息（笔记 / 导出用）
     assert len(lesson_service.load_chat(lesson)) == 3
+
+
+def test_legacy_session_reads_back_new_turns(tmp_path: Path) -> None:
+    """M35 回归：老记录（没有 session 字段）合成「历史追问」后，新回答会被写成 session=chat-legacy。
+
+    以前 ``load_chat`` 只认「没有 session 字段」的老记录，于是新回答一落盘就读不回来——
+    界面上表现为「追问第二次，答案消失了」（每次回答结束都会重载记录，所以必现）。
+    """
+    lesson = _lesson(tmp_path)
+    # 老版本留下的两行：没有 session 字段（M27 之前的格式）
+    lesson_service.append_chat_turn(lesson, {"role": "user", "text": "老问题"})
+    lesson_service.append_chat_turn(lesson, {"role": "assistant", "md": "老回答"})
+
+    legacy = lesson_service.latest_chat_session_id(lesson)
+    assert legacy == lesson_service.LEGACY_SESSION_ID
+
+    # 新版追问写进这个虚拟会话：读写必须对称
+    lesson_service.append_chat_turn(lesson, {"role": "user", "text": "新问题一"}, session_id=legacy)
+    lesson_service.append_chat_turn(lesson, {"role": "assistant", "md": "新回答一"}, session_id=legacy)
+    lesson_service.append_chat_turn(lesson, {"role": "user", "text": "新问题二"}, session_id=legacy)
+    lesson_service.append_chat_turn(lesson, {"role": "assistant", "md": "新回答二"}, session_id=legacy)
+
+    messages = lesson_service.load_chat(lesson, session_id=legacy)
+    assert [item.get("text") or item.get("md") for item in messages] == [
+        "老问题", "老回答", "新问题一", "新回答一", "新问题二", "新回答二",
+    ]
+    # 只合成一个「历史追问」会话，不会因为新记录多出一个会话
+    assert [item["id"] for item in lesson_service.chat_sessions(lesson)] == [legacy]
+
+
+def test_ask_twice_in_legacy_session_keeps_both_answers(tmp_path: Path) -> None:
+    """按界面的真实顺序复现：在「历史追问」里连问两次，两次问答都要读得回来。"""
+
+    class _FakeQa:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def answer(self, **_kwargs):
+            self.calls += 1
+            for block in (
+                {"type": "text", "md": f"第 {self.calls} 次回答"},
+                {"type": "done", "tokens": 0},
+            ):
+                yield json.dumps(block, ensure_ascii=False) + "\n"
+
+    lesson = _lesson(tmp_path)
+    lesson_service.append_chat_turn(lesson, {"role": "user", "text": "老问题"})
+    session_id = lesson_service.latest_chat_session_id(lesson)
+    qa = _FakeQa()
+
+    async def ask(question: str) -> None:
+        async for _piece in lesson_service.ask_question(
+            lesson, teacher=None, qa=qa, question=question, context={}, session_id=session_id
+        ):
+            pass
+
+    asyncio.run(ask("第一次提问"))
+    asyncio.run(ask("第二次提问"))
+
+    texts = [
+        str(item.get("text") or item.get("md") or "")
+        for item in lesson_service.load_chat(lesson, session_id=session_id)
+    ]
+    assert any("第一次提问" in text for text in texts)
+    assert any("第 1 次回答" in text for text in texts)
+    assert any("第二次提问" in text for text in texts)
+    assert any("第 2 次回答" in text for text in texts), "第二次的回答必须读得回来（否则界面表现为消失）"
 
 
 def test_first_question_auto_names_the_session(tmp_path: Path) -> None:

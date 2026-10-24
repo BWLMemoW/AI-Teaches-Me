@@ -127,6 +127,7 @@ class MainWindow(QMainWindow):
             courses_dir=result.layout.courses,
             agent_factory=lambda: QaAgent(self._services.client),
             thread_pool=self._pool,
+            tooling_factory=self._qa_tooling_factory(),
         )
         self.qa_page.status_message.connect(lambda message: self.statusBar().showMessage(message, 10000))
         self.notes_page = NotesPage(courses_dir=result.layout.courses, pdf_printer=None)
@@ -219,6 +220,26 @@ class MainWindow(QMainWindow):
     def css_vars(self) -> dict:
         return dict(self._css_vars)
 
+    def _qa_tooling_factory(self):
+        """小灶与学习台共用同一套工具（M33）：按课程目录装配一次，切课时重建。
+
+        没有 ``lesson_dir``，所以「落盘类」动作自动跳过；``plot_function`` / ``model_3d``
+        / 图示 / 检索 / 出题照常可用，工具开关或档案能力关闭时返回 ``(None, None)`` 退回纯对话。
+        """
+        from ..agents.tooling import build_course_tooling
+
+        def factory(course_dir):
+            return build_course_tooling(
+                course_dir=course_dir,
+                index=getattr(self._services, "index", None),
+                client=getattr(self._services, "client", None),
+                config=getattr(self._services, "config", None),
+                search_service=getattr(self._services, "search", None),
+                theme=dict(self._css_vars or {}) or None,
+            )
+
+        return factory
+
     @Slot(str)
     def _on_theme_changed(self, _key: str) -> None:
         self.apply_current_theme()
@@ -240,6 +261,10 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_course_created(self, result: object) -> None:
+        assign = getattr(self.library_page, "assign_new_course", None)
+        course_id = str(getattr(result, "course_id", "") or "")
+        if callable(assign) and course_id:
+            assign(course_id)
         self.refresh_library()
         self.nav.setCurrentRow(self.NAV_COURSES)
         name = getattr(result, "name", "")
@@ -287,6 +312,9 @@ class MainWindow(QMainWindow):
         """偏好改动后立刻生效：主题/排版/人设/生成偏好。"""
         self.apply_current_theme()
         self.refresh_library()
+        refresh = getattr(self.study_page, "refresh_generation_defaults", None)
+        if callable(refresh):
+            refresh()
 
     @Slot(str)
     def _open_folder(self, path: str) -> None:

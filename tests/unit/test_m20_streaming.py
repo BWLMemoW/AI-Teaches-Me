@@ -7,7 +7,7 @@ import pytest
 pytestmark = pytest.mark.ui
 
 
-def test_blocks_are_appended_while_generating(qtbot, tmp_path) -> None:
+def test_blocks_are_appended_while_generating(qtbot, tmp_path, monkeypatch) -> None:
     """M20 回归：每个内容块到达都要立刻追加到阅读区（不再等全部生成完）。"""
     from PySide6.QtWidgets import QWidget
 
@@ -47,6 +47,8 @@ def test_blocks_are_appended_while_generating(qtbot, tmp_path) -> None:
     qtbot.addWidget(page)
     try:
         page.open_course(tmp_path / "Courses" / "ATM 使用指南")
+        # 生成前会弹「准备页」（选资料 / 直接生成）；这个用例只关心流式渲染，跳过它
+        monkeypatch.setattr(page, "_open_generate_dialog", lambda: True)
 
         page.generate_button.click()          # 应先出现占位提示批次
         assert renderer.batches and "正在生成讲义" in str(renderer.batches[-1])

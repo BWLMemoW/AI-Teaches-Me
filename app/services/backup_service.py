@@ -50,7 +50,12 @@ def backup_library(courses_dir: str | Path, target: str | Path | None = None) ->
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
+        folders_file = root / ".library" / "folders.json"
+        if folders_file.is_file():
+            archive.write(folders_file, arcname=".library/folders.json")
         for course in sorted(item for item in root.iterdir() if item.is_dir()):
+            if course.name.startswith("."):
+                continue
             _zip_tree(course, archive, arc_prefix=course.name)
     return destination
 

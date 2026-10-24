@@ -229,9 +229,12 @@ class DirectorAgent(AgentBase):
         except TruncatedOutput:
             return await collect(max_tokens=MATERIALS_MAX_TOKENS)
     async def _refine(self, outline: CourseOutline, *, cancel: Any = None) -> CourseOutline | None:
+        # 不截断：截出来的半截 JSON 会让模型只顾着补括号、不落笔（与资料生成同一策略）
+        payload = outline.model_dump_json()
+        draft = payload if len(payload) <= MATERIALS_JSON_LIMIT else compact_outline_text(outline)
         messages: list[Mapping[str, Any]] = [
             {"role": "user", "content": "这是当前大纲草稿，请细化它。"},
-            {"role": "assistant", "content": outline.model_dump_json()[:12000]},
+            {"role": "assistant", "content": draft},
             {
                 "role": "user",
                 "content": (

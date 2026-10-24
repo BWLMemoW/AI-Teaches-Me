@@ -11,9 +11,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
+from PySide6.QtGui import QDrag, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
 from ...core.models import CourseIcon
 from .tag_chip import build_tag_row
 from ..theme.presets import PRESETS
+from .folder_tree import COURSE_MIME
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,7 @@ class CourseCard(QFrame):
     context_requested = Signal(object, object)  # (summary, 全局坐标)
 
     CARD_WIDTH = 244
+    CARD_HEIGHT = 200
 
     def __init__(
         self,
@@ -99,9 +102,11 @@ class CourseCard(QFrame):
         self.summary = summary
         self.style_tokens = style or CardStyle()
         self._progress = progress or {}
+        self._press_pos = QPoint()
+        self._dragging = False
         self.setFixedWidth(self.CARD_WIDTH)
-        # 卡片高度贴合内容，不被网格行拉伸（否则中间会出现一大块空白）
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
+        self.setFixedHeight(self.CARD_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setObjectName("CourseCard")
@@ -123,6 +128,7 @@ class CourseCard(QFrame):
         title_box.setSpacing(2)
         self.title_label = QLabel(summary.name)
         self.title_label.setWordWrap(True)
+        self.title_label.setMaximumHeight(40)
         self.title_label.setStyleSheet(f"color: {self.style_tokens.text}; font-size: 15px; font-weight: 600;")
         title_box.addWidget(self.title_label)
 
@@ -194,10 +200,33 @@ class CourseCard(QFrame):
 
     # --- 交互 -----------------------------------------------------------
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt 命名
-        # 只有左键才算「打开」：否则右键会先跳进课程，把上下文菜单顶掉（曾出现的「右键没作用」）
         if event.button() == Qt.MouseButton.LeftButton:
-            self.activated.emit(self.summary)
+            self._press_pos = event.position().toPoint()
+            self._dragging = False
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        if (
+            event.buttons() & Qt.MouseButton.LeftButton
+            and not self._dragging
+            and (event.position().toPoint() - self._press_pos).manhattanLength()
+            >= QApplication.startDragDistance()
+        ):
+            self._dragging = True
+            mime = QMimeData()
+            mime.setData(COURSE_MIME, str(self.summary.id).encode("utf-8"))
+            drag = QDrag(self)
+            drag.setMimeData(mime)
+            drag.setPixmap(self.grab())
+            drag.exec(Qt.DropAction.MoveAction)
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        if event.button() == Qt.MouseButton.LeftButton and not self._dragging:
+            self.activated.emit(self.summary)
+        self._dragging = False
+        super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         self.context_requested.emit(self.summary, event.globalPos())

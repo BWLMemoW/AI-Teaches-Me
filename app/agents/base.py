@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,14 @@ PERSONA_CONFLICT_PATTERNS: tuple[tuple[str, ...], ...] = (
     ("skip", "protocol"),
 )
 
+#: 「不要省略 / 不得改变 / 禁止忽略」这类句子是在**加强**硬边界，不是越权；
+#: 不能和「省略知识点」「忽略上面的规则」一起被删掉。
+PERSONA_GUARD_PATTERN = re.compile(
+    r"(不要|不得|不能|禁止|切勿|别|do not|don't|never)\s*"
+    r"(省略|减少|压缩|跳过|不讲|只讲|讲浅|改变|修改|忽略|违反|破坏|覆盖|omit|skip|ignore)",
+    re.IGNORECASE,
+)
+
 
 class PromptMissing(ConfigError):
     user_message = "提示词文件缺失"
@@ -51,6 +60,9 @@ class PromptParts:
     shared: tuple[str, ...] = ("shared/safety.md", "shared/untrusted.md", "shared/style.md")
     skeleton: str = ""
     persona: str | None = None
+    # 人设名（如「🐱 猫娘助教」）。只写正文时模型不知道自己是谁，
+    # 语气很容易退化成中性说明；带上身份名后人设才在讲义 / 追问里稳定体现。
+    persona_label: str = ""
     depth: str | None = None
     protocol: str = ""
     coverage: str | None = "shared/coverage.md"
@@ -75,9 +87,10 @@ class PromptAssembler:
         dropped: list[str] = []
         for line in (body or "").splitlines():
             lowered = line.lower()
-            if any(
+            conflicts = any(
                 all(token in lowered for token in group) for group in PERSONA_CONFLICT_PATTERNS
-            ):
+            )
+            if conflicts and not PERSONA_GUARD_PATTERN.search(lowered):
                 dropped.append(line.strip())
                 continue
             kept.append(line)
@@ -87,10 +100,18 @@ class PromptAssembler:
         chunks: list[str] = [self.load(name) for name in parts.shared]
         if parts.skeleton:
             chunks.append(self.load(parts.skeleton))
-        if parts.persona:
-            body, dropped = self.filter_persona(parts.persona)
+        if parts.persona or parts.persona_label:
+            body, dropped = self.filter_persona(parts.persona or "")
+            label = str(parts.persona_label or "").strip()
+            header = "## 当前教学人设（只影响表达层）"
+            if label:
+                header += (
+                    f"\n\n你的身份是「{label}」。讲解与答疑全程都用这个人设的语气、称呼与举例风格，"
+                    "让读者一眼看出是「谁」在讲课；但不要为了演人设牺牲信息密度。"
+                )
             if body:
-                chunks.append("## 当前教学人设（只影响表达层）\n\n" + body)
+                header += "\n\n" + body
+            chunks.append(header)
             if dropped:
                 chunks.append(f"（已忽略 {len(dropped)} 条与教学规则冲突的人设指令）")
         if parts.depth:

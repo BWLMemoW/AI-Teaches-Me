@@ -152,6 +152,28 @@ def test_outline_tree_roundtrip_keeps_knowledge_points(qtbot) -> None:
     assert rebuilt.chapters[0].lessons[1].title == "第 1-2 节"
 
 
+def test_outline_tree_rename_selected_preserves_id_and_minutes(qtbot, monkeypatch) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    outline = CourseOutline.model_validate(json.loads(_outline_json(1, 1)))
+    tree = OutlineTreeWidget()
+    qtbot.addWidget(tree)
+    tree.set_outline(outline)
+    lesson = tree.topLevelItem(0).child(0)
+    tree.setCurrentItem(lesson)
+
+    monkeypatch.setattr(
+        QInputDialog,
+        "getText",
+        lambda *args, **kwargs: ("JOIN 家族: INNER / LEFT / RIGHT", True),
+    )
+
+    assert tree.rename_selected() is True
+    assert lesson.text(0).startswith("L1-1 ")
+    assert lesson.text(0).endswith("（10 分钟）")
+    assert tree.to_outline(outline).chapters[0].lessons[0].title == "JOIN 家族: INNER / LEFT / RIGHT"
+
+
 def test_library_page_filters_and_http_banner(qtbot, tmp_path: Path) -> None:
     services, _ = _services(tmp_path, [_outline_json()])
     page = LibraryPage(services.result.layout.courses, service=services.library)

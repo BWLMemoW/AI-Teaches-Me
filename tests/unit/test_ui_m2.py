@@ -101,7 +101,128 @@ def test_study_page_opens_course_and_builds_tree(qtbot, tmp_path: Path) -> None:
         services.index.close()
 
 
-def test_study_page_generates_script_and_bumps_version(qtbot, tmp_path: Path) -> None:
+def test_lesson_settings_follow_global_defaults_across_switches(qtbot, tmp_path: Path) -> None:
+    from app.services.persona_service import PersonaService
+
+    services = _services(tmp_path, [])
+    config = services.config
+    personas = PersonaService(user_dir=services.result.layout.personas)
+    config.persona.default = personas.list_personas()[-1].id
+    config.generation.default_depth = "deep"
+    lessons = list((_seed_course(tmp_path) / "chapters").glob("*/lessons/*/lesson.json"))
+    for path in lessons:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["persona"] = {"id": "inherit", "version": 1}
+        data["depth"] = "inherit"
+        data["settings_version"] = lesson_service.SETTINGS_VERSION
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    page = StudyPage(services=services, renderer=_StubRenderer())
+    qtbot.addWidget(page)
+    try:
+        page.open_course(_seed_course(tmp_path))
+        first = page._lesson_dir
+        assert page.depth_combo.currentData() == "inherit"
+        assert page._effective_depth() == "deep"
+        assert page.persona_combo.currentData() == "inherit"
+        assert page._current_persona().id == config.persona.default
+
+        second = next(path.parent for path in lessons if path.parent != first)
+        page.load_lesson(second)
+
+        assert page.depth_combo.currentData() == "inherit"
+        assert page._effective_depth() == "deep"
+        assert page.persona_combo.currentData() == "inherit"
+    finally:
+        services.index.close()
+
+
+def test_lesson_context_carries_previous_and_future_scope(qtbot, tmp_path: Path) -> None:
+    """回归：生成讲义时要知道全课顺序，而不是只看到当前一小节。"""
+    services = _services(tmp_path, [])
+    page = StudyPage(services=services, renderer=_StubRenderer())
+    qtbot.addWidget(page)
+    try:
+        tree = course_service.lesson_tree(_seed_course(tmp_path))
+        lessons = [item for chapter in tree for item in chapter["lessons"]]
+        target = lessons[1]
+        page.open_course(_seed_course(tmp_path), lesson_dir=target["path"])
+
+        context = page._context
+        assert context["course_position"]["overall_index"] == 2
+        assert context["course_position"]["overall_total"] == len(lessons)
+        assert context["covered_lesson_count"] == 1
+        assert context["covered_lessons"][-1]["id"] == lessons[0]["id"]
+        assert context["future_lesson_count"] == len(lessons) - 2
+        assert context["future_lessons"][0]["id"] == lessons[2]["id"]
+        assert context["next_lesson"].startswith(lessons[2]["id"])
+        assert context["previous_summary"]
+        assert context["outline"]["chapters"]
+    finally:
+        services.index.close()
+
+
+def test_apply_settings_to_course_writes_every_lesson(qtbot, tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    services = _services(tmp_path, [])
+    page = StudyPage(services=services, renderer=_StubRenderer())
+    qtbot.addWidget(page)
+    try:
+        page.open_course(_seed_course(tmp_path))
+        page.depth_combo.setCurrentIndex(page.depth_combo.findData("deep"))
+        page.quiz_toggle.setCurrentIndex(page.quiz_toggle.findData("off"))
+        page.self_toggle.setCurrentIndex(page.self_toggle.findData("on"))
+        persona_id = str(page.persona_combo.itemData(1))
+        page.persona_combo.setCurrentIndex(1)
+        monkeypatch.setattr(
+            QMessageBox,
+            "question",
+            lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+        )
+
+        page._apply_settings_to_course()
+
+        paths = list((_seed_course(tmp_path) / "chapters").glob("*/lessons/*/lesson.json"))
+        assert len(paths) >= 2
+        for path in paths:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            assert data["depth"] == "deep"
+            assert data["persona"]["id"] == persona_id
+            assert data["assessment"] == {"quiz": "off", "self_assessment": "on"}
+    finally:
+        services.index.close()
+
+
+def test_legacy_lesson_defaults_migrate_once(tmp_path: Path) -> None:
+    services = _services(tmp_path, [])
+    try:
+        lesson_dirs = sorted((_seed_course(tmp_path) / "chapters").glob("*/lessons/*"))
+        first = lesson_dirs[0] / "lesson.json"
+        second = lesson_dirs[1] / "lesson.json"
+        data = json.loads(first.read_text(encoding="utf-8"))
+        data.update({"depth": "standard", "persona": {"id": "default-teacher", "version": 1}})
+        data.pop("settings_version", None)
+        first.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        data = json.loads(second.read_text(encoding="utf-8"))
+        data.update({"depth": "deep", "persona": {"id": "catgirl-assistant", "version": 1}})
+        data.pop("settings_version", None)
+        second.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        lesson_service.migrate_legacy_lesson_settings(_seed_course(tmp_path))
+
+        migrated = json.loads(first.read_text(encoding="utf-8"))
+        kept = json.loads(second.read_text(encoding="utf-8"))
+        assert migrated["depth"] == "inherit"
+        assert migrated["persona"]["id"] == "inherit"
+        assert migrated["settings_version"] == lesson_service.SETTINGS_VERSION
+        assert kept["depth"] == "deep"
+        assert kept["persona"]["id"] == "catgirl-assistant"
+        assert lesson_service.migrate_legacy_lesson_settings(_seed_course(tmp_path)) == 0
+    finally:
+        services.index.close()
+
+
+def test_study_page_generates_script_and_bumps_version(qtbot, tmp_path: Path, monkeypatch) -> None:
     blocks = [
         {"type": "meta", "lesson_id": "L1-1", "depth": "standard", "version": 1},
         {"type": "text", "md": "## 工作区与课程数据分离\n\nCourses/ 是你的课程资产。"},
@@ -115,6 +236,8 @@ def test_study_page_generates_script_and_bumps_version(qtbot, tmp_path: Path) ->
     qtbot.addWidget(page)
     try:
         page.open_course(_seed_course(tmp_path))
+        # 生成前会弹「准备页」（上传 / 选资料 / 直接生成）；这里只验证生成与版本号
+        monkeypatch.setattr(page, "_open_generate_dialog", lambda: True)
         page.generate_button.click()
 
         qtbot.waitUntil(lambda: "讲义已生成" in page.status_label.text(), timeout=20000)
@@ -196,12 +319,13 @@ def test_study_page_mark_complete_updates_progress_and_review(qtbot, tmp_path: P
         services.index.close()
 
 
-def test_study_page_generation_failure_is_reported(qtbot, tmp_path: Path) -> None:
+def test_study_page_generation_failure_is_reported(qtbot, tmp_path: Path, monkeypatch) -> None:
     services = _services(tmp_path, ["这不是 NDJSON"])
     page = StudyPage(services=services, renderer=_StubRenderer())
     qtbot.addWidget(page)
     try:
         page.open_course(_seed_course(tmp_path))
+        monkeypatch.setattr(page, "_open_generate_dialog", lambda: True)
         page.generate_button.click()
 
         qtbot.waitUntil(lambda: "失败" in page.status_label.text() or "覆盖" in page.status_label.text(), timeout=20000)

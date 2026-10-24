@@ -145,16 +145,21 @@ class QaService:
         outline_summary: str = "",
         persona_name: str | None = None,
         cancel: Any = None,
+        executor: Any = None,
+        tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
+        """提问并流式返回 NDJSON 片段；带 ``executor`` / ``tools`` 时走 Tool Loop（与课内追问同一套）。"""
         history = self.messages(session_id)
         self.add_message(session_id, role="user", text=question, refs=[str(item.get("id")) for item in refs])
         collected: list[str] = []
+        extra: dict[str, Any] = {"executor": executor, "tools": tools} if (executor is not None and tools) else {}
         async for piece in self.agent.answer(
             question=question,
             refs=list(refs),
             outline_summary=outline_summary,
             history=history,
             persona_name=persona_name,
+            **extra,
         ):
             collected.append(piece)
             yield piece

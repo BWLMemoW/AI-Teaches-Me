@@ -43,6 +43,7 @@ class QaAgent(AgentBase):
         history: Sequence[Mapping[str, Any]] = (),
         persona_name: str | None = None,
         selection: str = "",
+        attachments: Sequence[Mapping[str, Any]] = (),
     ) -> str:
         lines = [
             "这是课内答疑（小灶）。**学生的问题就是本次唯一的任务**：直接回答它，",
@@ -54,6 +55,11 @@ class QaAgent(AgentBase):
             lines.append("所处位置：" + outline_summary[:800])
         if selection:
             lines.append("学生选中的讲义片段：" + str(selection)[:800])
+        if attachments:
+            lines.append(
+                f"学生还引用了 {len(attachments)} 张讲义里的图片（图片随本条消息一起发来）："
+                + "、".join(str(item.get("caption") or item.get("path") or "讲义图片") for item in attachments)[:300]
+            )
         if refs:
             lines.append("\n【可依据的引用卡片（不得超出本课程）】")
             for index, ref in enumerate(refs, start=1):
@@ -85,6 +91,8 @@ class QaAgent(AgentBase):
         persona_name: str | None = None,
         selection: str = "",
         persona_body: str | None = None,
+        persona_label: str | None = None,
+        attachments: Sequence[Mapping[str, Any]] = (),
         depth: str = "standard",
         cancel: Any = None,
         executor: Any = None,
@@ -96,20 +104,25 @@ class QaAgent(AgentBase):
         **extra: Any,
     ) -> AsyncIterator[str]:
         """回答一个课内问题；带工具时走 Tool Loop（画图 / 检索资料等）。"""
-        system = self.system_prompt(persona_body=persona_body, depth=depth)
-        messages = [
-            {
-                "role": "user",
-                "content": self.build_user_prompt(
-                    question=question,
-                    refs=refs,
-                    outline_summary=outline_summary,
-                    history=history,
-                    persona_name=persona_name,
-                    selection=selection,
-                ),
-            }
-        ]
+        system = self.system_prompt(persona_body=persona_body, persona_label=persona_label or "", depth=depth)
+        prompt = self.build_user_prompt(
+            question=question,
+            refs=refs,
+            outline_summary=outline_summary,
+            history=history,
+            persona_name=persona_name,
+            selection=selection,
+            attachments=attachments,
+        )
+        # 引用了图片 → 用多模态消息（与 review_image 同一套形状：text + image_url）
+        content: Any = prompt
+        images = [str(item.get("data_url") or "") for item in attachments]
+        images = [url for url in images if url]
+        if images:
+            parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+            parts.extend({"type": "image_url", "image_url": {"url": url}} for url in images)
+            content = parts
+        messages = [{"role": "user", "content": content}]
         kwargs: dict[str, Any] = {
             "task": "teach",
             "model": model,

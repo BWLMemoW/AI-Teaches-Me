@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS materials (
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS material_chunks USING fts5(
-  material_id UNINDEXED, page UNINDEXED, heading, text,
+  material_id UNINDEXED, page UNINDEXED, heading, text, source UNINDEXED,
   tokenize='trigram'
 );
 
@@ -116,7 +116,24 @@ class SqliteIndex:
 
     def initialize(self) -> None:
         with self.transaction() as conn:
+            self._migrate_material_chunks(conn)
             conn.executescript(DDL)
+
+    def _migrate_material_chunks(self, conn: sqlite3.Connection) -> None:
+        """``material_chunks`` 结构变了就删表重建。
+
+        索引库定位是「可重建缓存」（§3.7）：课程目录里的 ``materials/parsed/*.chunks.json``
+        会在 ``MaterialService.reindex_course`` 里把分块重新灌进来，所以这里可以直接重建。
+        """
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='material_chunks'"
+        ).fetchone()
+        if row is None:
+            return
+        columns = {str(item[1]) for item in conn.execute("PRAGMA table_info(material_chunks)")}
+        if "source" in columns:
+            return
+        conn.execute("DROP TABLE IF EXISTS material_chunks")
 
     def is_trigram_supported(self) -> bool:
         with self._lock:
@@ -342,18 +359,68 @@ class SqliteIndex:
             conn.execute("DELETE FROM material_chunks WHERE material_id = ?", (material_id,))
             for chunk in chunks:
                 conn.execute(
-                    "INSERT INTO material_chunks (material_id, page, heading, text) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO material_chunks (material_id, page, heading, text, source) "
+                    "VALUES (?, ?, ?, ?, ?)",
                     (
                         material_id,
                         int(chunk.get("page") or 0),
                         str(chunk.get("heading") or ""),
                         str(chunk.get("text") or ""),
+                        str(chunk.get("source") or "text"),
                     ),
                 )
         return len(chunks)
 
-    def search_chunks(self, query: str, *, k: int = 5, material_ids: Sequence[str] | None = None) -> list[dict[str, Any]]:
-        """中文检索：trigram 走索引；查询串 < 3 字回退 LIKE（§3.7）。"""
+    def count_chunks(self, material_id: str) -> int:
+        """某个资料已经索引了多少块（重建索引时用来判断要不要补建）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM material_chunks WHERE material_id = ?", (str(material_id),)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def chunks_for_page(self, material_id: str, page: int, *, limit_chars: int = 2400) -> list[dict[str, Any]]:
+        """取某份资料某一页（PPT 即幻灯片）的全部分块，供 Agent 按页取原文。
+
+        以前 Agent 只能靠关键词撞运气；有了这个接口，它能「翻到第 37 页」再讲。
+        """
+        clauses = ["material_id = ?"]
+        params: list[Any] = [str(material_id)]
+        if int(page or 0) > 0:
+            clauses.append("page = ?")
+            params.append(int(page))
+        sql = (
+            "SELECT material_id, page, heading, text, source FROM material_chunks "
+            f"WHERE {' AND '.join(clauses)} ORDER BY rowid"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(params)).fetchall()
+        picked: list[dict[str, Any]] = []
+        used = 0
+        for row in rows:
+            item = dict(row)
+            text = str(item.get("text") or "")
+            room = int(limit_chars) - used
+            if room <= 0:
+                break
+            if len(text) > room:
+                item["text"] = text[:room]
+            used += len(str(item.get("text") or ""))
+            picked.append(item)
+        return picked
+
+    def search_chunks(
+        self,
+        query: str,
+        *,
+        k: int = 5,
+        material_ids: Sequence[str] | None = None,
+        course_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """中文检索：trigram 走索引；查询串 < 3 字回退 LIKE（§3.7）。
+
+        带 ``course_id`` 时只在**本课程**的资料里找，避免讲义/答疑引用到别的课的资料。
+        """
         text = (query or "").strip()
         if not text:
             return []
@@ -369,15 +436,19 @@ class SqliteIndex:
             placeholders = ",".join("?" for _ in material_ids)
             clauses.append(f"material_id IN ({placeholders})")
             params.extend(material_ids)
+        if course_id:
+            clauses.append("material_id IN (SELECT id FROM materials WHERE course_id = ?)")
+            params.append(str(course_id))
         where = " AND ".join(clauses)
-        sql = f"SELECT material_id, page, heading, text FROM material_chunks WHERE {where} LIMIT ?"
+        columns = "material_id, page, heading, text, source"
+        sql = f"SELECT {columns} FROM material_chunks WHERE {where} LIMIT ?"
         params.append(int(k))
         with self._lock:
             try:
                 rows = self._conn.execute(sql, tuple(params)).fetchall()
             except sqlite3.OperationalError:
                 rows = self._conn.execute(
-                    "SELECT material_id, page, heading, text FROM material_chunks WHERE text LIKE ? LIMIT ?",
+                    f"SELECT {columns} FROM material_chunks WHERE text LIKE ? LIMIT ?",
                     (f"%{text}%", int(k)),
                 ).fetchall()
         return [dict(row) for row in rows]

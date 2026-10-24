@@ -18,6 +18,7 @@ from app.core.paths import (
     read_text,
     safe_component,
     safe_join,
+    safe_title_component,
 )
 
 
@@ -51,6 +52,20 @@ def test_safe_component_rejects_illegal_names(bad: str) -> None:
 def test_safe_component_rejects_non_string() -> None:
     with pytest.raises(InvalidName):
         safe_component(123)  # type: ignore[arg-type]
+
+
+def test_safe_title_component_keeps_readable_title_without_path_separators() -> None:
+    value = safe_title_component("L3-2 JOIN 家族: INNER / LEFT / RIGHT")
+
+    assert value == "L3-2 JOIN 家族：INNER ／ LEFT ／ RIGHT"
+    assert "/" not in value and "\\" not in value
+
+
+def test_safe_title_component_neutralizes_dotdot() -> None:
+    value = safe_title_component("../../evil")
+
+    assert "/" not in value and "\\" not in value
+    assert ".." not in value
 
 
 def test_safe_join_builds_nested_path(tmp_path: Path) -> None:

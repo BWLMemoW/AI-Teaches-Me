@@ -14,10 +14,12 @@ from pathlib import Path
 from ..core.paths import atomic_write_json, read_json, read_text
 from ..infra.sqlite_index import SqliteIndex
 from . import course_service
+from .folder_service import FolderService
 
 LIBRARY_DIR_NAME = ".library"
 TAGS_FILE = "tags.json"
 VIEWS_FILE = "saved_views.json"
+UNFILED_FOLDER_ID = "__unfiled__"
 
 SORT_OPTIONS: tuple[tuple[str, str], ...] = (
     ("recent", "最近学习"),
@@ -46,6 +48,10 @@ class LibraryFilter:
     sort: str = "recent"
     persona: str | None = None
     has_material: bool | None = None
+    #: None=全部课程；UNFILED_FOLDER_ID=未分类；其它值=某个虚拟文件夹
+    folder_id: str | None = None
+    #: 搜索时通常为 True，浏览文件夹时只看直属课程
+    include_descendants: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -56,6 +62,8 @@ class LibraryFilter:
             "sort": self.sort,
             "persona": self.persona,
             "has_material": self.has_material,
+            "folder_id": self.folder_id,
+            "include_descendants": self.include_descendants,
         }
 
     @classmethod
@@ -68,6 +76,8 @@ class LibraryFilter:
             sort=str(data.get("sort") or "recent"),
             persona=data.get("persona") or None,  # type: ignore[arg-type]
             has_material=data.get("has_material") if isinstance(data.get("has_material"), bool) else None,
+            folder_id=data.get("folder_id") or None,  # type: ignore[arg-type]
+            include_descendants=bool(data.get("include_descendants") or False),
         )
 
 
@@ -77,9 +87,11 @@ class LibraryService:
         *,
         courses_dir: str | Path,
         index: SqliteIndex | None = None,
+        folders: FolderService | None = None,
     ) -> None:
         self.courses_dir = Path(courses_dir)
         self.index = index
+        self.folders = folders or FolderService(self.courses_dir)
 
     # --- 落盘 / 装载（删库不丢） ----------------------------------------
     @property
@@ -117,16 +129,41 @@ class LibraryService:
     # --- 扫描 / 检索 ----------------------------------------------------
     def refresh(self) -> list[course_service.CourseSummary]:
         summaries = course_service.scan_courses(self.courses_dir)
-        if self.index is None:
-            return summaries
-        self.index.rebuild_from_courses(summaries)
-        if not self.index.list_tags():
-            self.load_state()
+        self.folders.remove_missing_courses({summary.id for summary in summaries})
+        if self.index is not None:
+            self.index.rebuild_from_courses(summaries)
+            if not self.index.list_tags():
+                self.load_state()
+            self.reindex_materials(summaries)
         merged: list[course_service.CourseSummary] = []
         for summary in summaries:
-            tag_names = tuple(tag["name"] for tag in self.index.tags_for_course(summary.id))
-            merged.append(replace(summary, tags=tag_names) if tag_names else summary)
+            folder_id = self.folders.folder_of(summary.id) or ""
+            tag_names = (
+                tuple(tag["name"] for tag in self.index.tags_for_course(summary.id))
+                if self.index is not None
+                else ()
+            )
+            changes: dict[str, object] = {}
+            if folder_id:
+                changes["folder_id"] = folder_id
+            if tag_names:
+                changes["tags"] = tag_names
+            merged.append(replace(summary, **changes) if changes else summary)
         return merged
+
+    def reindex_materials(self, summaries: Sequence[course_service.CourseSummary]) -> int:
+        """按课程目录补建资料分块（``library.db`` 删掉后的自愈路径，§3.7）。"""
+        from .material_service import MaterialService
+
+        restored = 0
+        for summary in summaries:
+            try:
+                restored += MaterialService.reindex_course(
+                    summary.path, course_id=summary.id, index=self.index
+                )
+            except Exception:  # noqa: BLE001 - 资料重建失败不该影响课程库刷新
+                continue
+        return restored
 
     def search(
         self,
@@ -137,6 +174,14 @@ class LibraryService:
         """搜索覆盖：课程名 / 描述 / 标签 / 章节标题 / 资料名（AC-44）。"""
         active = filter_ or LibraryFilter()
         items = list(summaries) if summaries is not None else self.refresh()
+
+        if active.folder_id == UNFILED_FOLDER_ID:
+            items = [item for item in items if not self.folders.folder_of(item.id)]
+        elif active.folder_id:
+            allowed = {active.folder_id}
+            if active.include_descendants:
+                allowed |= self.folders.descendant_ids(active.folder_id)
+            items = [item for item in items if self.folders.folder_of(item.id) in allowed]
 
         if active.tags and self.index is not None:
             tag_ids = [

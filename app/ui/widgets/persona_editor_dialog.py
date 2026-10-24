@@ -67,7 +67,9 @@ class PersonaEditorDialog(QDialog):
         self.tone_edit.setPlaceholderText("用逗号分隔，例如：温柔, 鼓励式, 有条理")
         form.addRow("语气关键词", self.tone_edit)
         self.tools_edit = QLineEdit()
-        self.tools_edit.setPlaceholderText("留空 = 允许全部工具；或填 search_materials, gen_svg, make_quiz")
+        self.tools_edit.setPlaceholderText(
+            "留空 = 允许全部工具；或填 search_materials, gen_svg, plot_function, model_3d, make_quiz"
+        )
         form.addRow("允许的工具", self.tools_edit)
         self.version_spin = QSpinBox()
         self.version_spin.setRange(1, 999)

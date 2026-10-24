@@ -144,6 +144,30 @@ def test_svg_renderer_produces_png(qtbot) -> None:
     assert payload.startswith(b"\x89PNG")
 
 
+@pytest.mark.ui
+def test_svg_renderer_defaults_to_transparent_background(qtbot) -> None:
+    """M33 回归：透明底不能写成 ``"#FFFFFF00"``——Qt 按 ``#AARRGGBB`` 解析会得到**不透明黄**，
+    于是气泡与灯箱里的图都带上黄底。这里直接验像素。"""
+    import io
+
+    from PIL import Image
+
+    from app.infra.svg_renderer import render_svg_png
+
+    svg = (
+        '<svg viewBox="0 0 100 50">'
+        "<title>圆</title><desc>一个小圆</desc>"
+        '<circle cx="50" cy="25" r="10" fill="#333333"/></svg>'
+    )
+    transparent = Image.open(io.BytesIO(render_svg_png(svg, width=200, scale=1.0))).convert("RGBA")
+    assert transparent.getpixel((5, 5))[3] == 0, "默认背景必须是透明的"
+
+    opaque = Image.open(
+        io.BytesIO(render_svg_png(svg, width=200, scale=1.0, background="#FFFFFF"))
+    ).convert("RGBA")
+    assert opaque.getpixel((5, 5)) == (255, 255, 255, 255), "给了背景色就按背景色填"
+
+
 def test_svg_renderer_returns_empty_for_broken_svg() -> None:
     from app.infra.svg_renderer import render_svg_png
 

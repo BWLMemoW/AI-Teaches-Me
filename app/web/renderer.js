@@ -25,7 +25,12 @@
     initialized: false,
     fallbackNotice: false,
     vendor: { markdownIt: false, katex: false, hljs: false },
-    md: null
+    md: null,
+    // 人设徽章（讲义顶部「谁在讲」）与划词标注（引用到追问）
+    persona: null,
+    annotations: [],
+    // JS → Python 的事件队列：由 Python 侧的定时器 drainEvents() 取走
+    events: []
   };
 
   function escapeHtml(text) {
@@ -52,7 +57,17 @@
       hljs: typeof window.hljs !== "undefined"
     };
     state.md = state.vendor.markdownIt
-      ? window.markdownit({ html: false, linkify: false, breaks: false })
+      ? window.markdownit({
+          html: false,
+          linkify: false,
+          breaks: false,
+          highlight: function (code, lang) {
+            var language = String(lang || "").trim();
+            var body = renderCodeHtml(code, language);
+            var className = "hljs" + (language ? " language-" + language : "");
+            return '<pre class="atm-code"><code class="' + escapeHtml(className) + '">' + body + "</code></pre>";
+          }
+        })
       : null;
     return state.vendor;
   }
@@ -381,6 +396,8 @@
       node.appendChild(el("div", "atm-error", "图片来源被拒绝：只允许本地受控路径（§13.3）。"));
       return node;
     }
+    node.setAttribute("data-asset", source);
+    node.setAttribute("data-caption", String(block.caption || ""));
     var img = document.createElement("img");
     img.setAttribute("src", source);
     img.setAttribute("loading", "lazy");
@@ -483,8 +500,7 @@
     return details;
   }
 
-  function blockElement(block) {
-    var type = block && block.type ? String(block.type) : "error";
+  function buildBlockElement(type, block) {
     switch (type) {
       case "meta": return renderMeta(block);
       case "text": return el("section", "atm-block atm-text", renderRich(block.md || ""));
@@ -504,6 +520,17 @@
       case "done": return renderDone(block);
       default: return renderUnknown(block);
     }
+  }
+
+  function blockElement(block) {
+    var type = block && block.type ? String(block.type) : "error";
+    var node = buildBlockElement(type, block);
+    // 记录块类型：划词标注时随事件一起回传，方便定位「这句出自哪种块」
+    if (node && node.setAttribute && type !== "done") {
+      node.setAttribute("data-block-type", type);
+      if (CITABLE_TYPES[type]) { attachCiteButton(node, block || {}); }
+    }
+    return node;
   }
 
   /* --- 对外 API（也是 QWebChannel 桥的接收侧，§4.8） ------------------ */
@@ -529,13 +556,16 @@
     if (state.root) {
       var warning = vendorWarningElement();
       if (warning) { state.root.appendChild(warning); }
+      renderPersonaBadge();
     }
     return state.blocks;
   }
 
   function renderBlocks(blocks) {
     reset();
-    return appendBlocks(blocks);
+    var count = appendBlocks(blocks);
+    applyAnnotations();
+    return count;
   }
 
   function renderFallbackMarkdown(text, note) {
@@ -588,6 +618,8 @@
       vendor: state.vendor,
       theme: document.documentElement.getAttribute("data-theme"),
       mode: document.documentElement.getAttribute("data-mode"),
+      persona: state.persona ? state.persona.name : null,
+      annotations: state.annotations.length,
       textLength: state.root ? state.root.textContent.length : 0  // textContent：不受 content-visibility 影响
     };
   }
@@ -602,7 +634,19 @@
       state.initialized = true;
       var warning = vendorWarningElement();
       if (warning && state.root) { state.root.appendChild(warning); }
+      // 划词工具条：只在讲义（本页）里启用；滚动 / Esc 时收起
+      document.addEventListener("mouseup", onDocumentMouseUp);
+      document.addEventListener("click", onDocumentClick);
+      document.addEventListener("mouseover", onDocumentMouseOver);
+      document.addEventListener("mouseout", onDocumentMouseOut);
+      document.addEventListener("scroll", function () { hideAnnotBar(); hideAnnotationBubble(); }, true);
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") { hideAnnotBar(); hideAnnotationBubble(); }
+      });
+      window.addEventListener("resize", function () { hideAnnotBar(); hideAnnotationBubble(); });
     }
+    if (config.persona) { setPersona(config.persona); }
+    if (config.annotations) { setAnnotations(config.annotations); }
     if (config.blocks) { appendBlocks(config.blocks); }
     if (config.theme) { setTheme(config.theme); }
     return getState();
@@ -634,6 +678,434 @@
     liveNode = null;
     return true;
   }
+
+  /* --- 人设徽章（人设必须在讲义里「看得见」，§4.14 / 新增 FR） ---------- */
+  function renderPersonaBadge() {
+    if (!state.root) { return null; }
+    var old = state.root.querySelector(".atm-persona");
+    if (old) { old.remove(); }
+    var persona = state.persona;
+    if (!persona || !persona.name) { return null; }
+    var node = el("div", "atm-persona");
+    node.setAttribute("data-persona", String(persona.id || ""));
+    node.appendChild(el("span", "atm-persona-avatar", escapeHtml(String(persona.avatar || "🎓"))));
+    var body = el("span", "atm-persona-body");
+    body.appendChild(el("span", "atm-persona-name", escapeHtml(String(persona.name))));
+    var tone = Array.isArray(persona.tone) ? persona.tone.filter(Boolean).join(" · ") : String(persona.tone || "");
+    var suffix = tone ? "正在讲解 · 语气：" + tone : "正在讲解本节";
+    body.appendChild(el("span", "atm-persona-note", escapeHtml(suffix)));
+    node.appendChild(body);
+    var hint = el("span", "atm-persona-hint", "选中任意文字可标注或追问");
+    node.appendChild(hint);
+    state.root.insertBefore(node, state.root.firstChild);
+    return node;
+  }
+
+  function setPersona(persona) {
+    state.persona = persona && persona.name ? persona : null;
+    renderPersonaBadge();
+    return state.persona;
+  }
+
+  function getPersona() {
+    return state.persona;
+  }
+
+  /* --- 划词标注（选中 → 标注 / 追问） --------------------------------- */
+  var MAX_SELECTION = 600;
+  var annotBar = null;
+  // 这几类块「有什么可以被引用」很清楚，直接给一个悬停按钮（图片 / 图示）
+  var CITABLE_TYPES = { image: 1, svg: 1, diagram: 1 };
+
+  function citeLabelFor(block, node) {
+    var type = String((block && block.type) || "");
+    var caption = String((block && (block.caption || block.title)) || "").trim();
+    if (type === "image") {
+      var asset = String((block && (block.path || block.src)) || (node ? node.getAttribute("data-asset") : "") || "");
+      return "图片" + (caption ? "：" + caption : "") + (asset ? "（文件：" + asset + "）" : "");
+    }
+    return "图示" + (caption ? "：" + caption : "");
+  }
+
+  function attachCiteButton(node, block) {
+    if (!node) { return node; }
+    node.setAttribute("data-citable", "1");
+    var button = el("button", "atm-cite-button", "💬 引用到追问");
+    button.type = "button";
+    button.title = "把这张图引用到右侧追问";
+    button.addEventListener("mousedown", function (event) { event.preventDefault(); });
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      pushEvent({
+        action: "cite_block",
+        quote: citeLabelFor(block, node),
+        block_type: String((block && block.type) || ""),
+        block_index: blockIndexOf(node),
+        asset: String((block && (block.path || block.src)) || node.getAttribute("data-asset") || "")
+      });
+    });
+    node.appendChild(button);
+    return node;
+  }
+
+  function pushEvent(payload) {
+    if (!payload || !payload.action) { return false; }
+    state.events.push(payload);
+    return true;
+  }
+
+  function drainEvents() {
+    // 踩过的坑：QtWebEngine 只把基本类型回传 Python，返回 JS 数组会得到空字符串，
+    // 事件会被静默丢掉（表现为「点了标注 / 追问没反应」）。所以这里统一返回 JSON 字符串。
+    if (!state.events.length) { return "[]"; }
+    var pending = state.events;
+    state.events = [];
+    return JSON.stringify(pending);
+  }
+
+  function clearSelection() {
+    var selection = window.getSelection ? window.getSelection() : null;
+    if (selection && selection.removeAllRanges) { selection.removeAllRanges(); }
+  }
+
+  function hideAnnotBar() {
+    if (annotBar) { annotBar.remove(); annotBar = null; }
+  }
+
+  function blockIndexOf(node) {
+    if (!node || !state.root) { return null; }
+    var block = node.closest ? node.closest(".atm-block") : null;
+    if (!block) { return null; }
+    var all = state.root.querySelectorAll(".atm-block");
+    for (var index = 0; index < all.length; index += 1) {
+      if (all[index] === block) { return index; }
+    }
+    return null;
+  }
+
+  function currentSelectionInfo() {
+    var selection = window.getSelection ? window.getSelection() : null;
+    if (!selection || selection.isCollapsed || !selection.rangeCount) { return null; }
+    var text = String(selection.toString() || "").replace(/\s+/g, " ").trim();
+    if (!text) { return null; }
+    var range = selection.getRangeAt(0);
+    var start = range.startContainer;
+    var node = start && start.nodeType === 1 ? start : (start ? start.parentElement : null);
+    if (!node || !state.root || !state.root.contains(node)) { return null; }
+    var block = node.closest ? node.closest(".atm-block") : null;
+    if (!block) { return null; }
+    var rect = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : null;
+    return {
+      quote: text.slice(0, MAX_SELECTION),
+      node: node,
+      block: block,
+      blockIndex: blockIndexOf(node),
+      blockType: String(block.getAttribute("data-block-type") || ""),
+      rect: rect
+    };
+  }
+
+  function actionButton(label, titleText, onClick) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "atm-annotbar-button";
+    button.textContent = label;
+    button.title = titleText;
+    button.addEventListener("mousedown", function (event) { event.preventDefault(); });
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  function showAnnotBar(info) {
+    hideAnnotBar();
+    var bar = el("div", "atm-annotbar");
+    bar.appendChild(
+      actionButton("✏️ 标注", "把这段原文记为本节标注", function () {
+        pushEvent({
+          action: "annotate",
+          quote: info.quote,
+          block_index: info.blockIndex,
+          block_type: info.blockType
+        });
+        hideAnnotBar();
+        clearSelection();
+      })
+    );
+    bar.appendChild(
+      actionButton("💬 追问", "直接把这段原文引用到右侧追问", function () {
+        pushEvent({ action: "ask_quote", quote: info.quote });
+        hideAnnotBar();
+        clearSelection();
+      })
+    );
+    document.body.appendChild(bar);
+    // 用文档坐标（absolute 定位）：滚动 / 打印导出都不会跑位，屏幕上就在选区旁边
+    var scrollX = window.pageXOffset || 0;
+    var scrollY = window.pageYOffset || 0;
+    var rect = info.rect;
+    var left = rect ? rect.left + scrollX + rect.width / 2 - bar.offsetWidth / 2 : 24;
+    var top = rect ? rect.top + scrollY - bar.offsetHeight - 10 : scrollY + 24;
+    var maxLeft = Math.max(8, document.documentElement.clientWidth - bar.offsetWidth - 8 + scrollX);
+    var maxTop = Math.max(8 + scrollY, document.documentElement.clientHeight - bar.offsetHeight - 8 + scrollY);
+    bar.style.left = Math.max(8, Math.min(left, maxLeft)) + "px";
+    bar.style.top = Math.max(8 + scrollY, Math.min(top, maxTop)) + "px";
+    annotBar = bar;
+    return bar;
+  }
+
+  function onDocumentMouseUp() {
+    window.setTimeout(function () {
+      var info = currentSelectionInfo();
+      if (!info) { hideAnnotBar(); return; }
+      showAnnotBar(info);
+    }, 10);
+  }
+
+  /* --- 点已标注的划线 → 让主线程打开「写评论 / 引用到追问」 ----------------- */
+  function onDocumentClick(event) {
+    var target = event.target;
+    var mark = target && target.closest ? target.closest("mark.atm-annotation") : null;
+    if (!mark || !state.root || !state.root.contains(mark)) { return; }
+    pushEvent({
+      action: "open_annotation",
+      annotation_id: String(mark.getAttribute("data-annotation-id") || "")
+    });
+  }
+
+  /* --- 鼠标停在划线上 → 浮出气泡：评论 / 引用到追问 ----------------------- */
+  var annotBubble = null;
+  var annotBubbleTimer = null;
+
+  function annotationById(annotationId) {
+    var wanted = String(annotationId || "");
+    for (var index = 0; index < state.annotations.length; index += 1) {
+      if (String(state.annotations[index].id || "") === wanted) { return state.annotations[index]; }
+    }
+    return null;
+  }
+
+  function hideAnnotationBubble() {
+    if (annotBubbleTimer) { window.clearTimeout(annotBubbleTimer); annotBubbleTimer = null; }
+    if (annotBubble) { annotBubble.remove(); annotBubble = null; }
+  }
+
+  function showAnnotationBubble(mark) {
+    hideAnnotationBubble();
+    var annotationId = String(mark.getAttribute("data-annotation-id") || "");
+    var annotation = annotationById(annotationId) || { quote: String(mark.textContent || ""), note: "" };
+    var bubble = el("div", "atm-annotbubble");
+    var note = String(annotation.note || "").trim();
+    bubble.appendChild(el("div", "atm-annotbubble-note", escapeHtml(note || "（这条划线还没有评论）")));
+
+    var row = el("div", "atm-annotbubble-row");
+    var commentButton = actionButton("💬 评论", "给这条划线写 / 改评论", function () {
+        pushEvent({ action: "comment_annotation", annotation_id: annotationId });
+        hideAnnotationBubble();
+      });
+    commentButton.classList.add("atm-annotbubble-button");
+    row.appendChild(commentButton);
+    var citeButton = actionButton("🔗 引用到追问", "把这句话（连评论一起）引用到右侧追问", function () {
+        pushEvent({ action: "cite_annotation", annotation_id: annotationId });
+        hideAnnotationBubble();
+      });
+    citeButton.classList.add("atm-annotbubble-button");
+    row.appendChild(citeButton);
+    bubble.appendChild(row);
+    bubble.addEventListener("mouseenter", function () {
+      if (annotBubbleTimer) { window.clearTimeout(annotBubbleTimer); annotBubbleTimer = null; }
+    });
+    bubble.addEventListener("mouseleave", hideAnnotationBubble);
+    document.body.appendChild(bubble);
+
+    var scrollX = window.pageXOffset || 0;
+    var scrollY = window.pageYOffset || 0;
+    var rect = mark.getBoundingClientRect();
+    // 兜底：万一块还在 content-visibility 的「跳过」状态，rect 会不可信 → 至少把气泡夹在可视区里
+    var usable = rect && rect.width > 0 && rect.height <= 220;
+    var maxLeft = Math.max(8, document.documentElement.clientWidth - bubble.offsetWidth - 8 + scrollX);
+    var maxTop = Math.max(8 + scrollY, document.documentElement.clientHeight - bubble.offsetHeight - 8 + scrollY);
+    var wantedLeft = usable ? rect.left + rect.width / 2 - bubble.offsetWidth / 2 : scrollX + 24;
+    var wantedTop = usable ? rect.bottom + scrollY + 8 : scrollY + 24;
+    bubble.style.left = Math.max(8, Math.min(wantedLeft, maxLeft)) + "px";
+    bubble.style.top = Math.max(8 + scrollY, Math.min(wantedTop, maxTop)) + "px";
+    annotBubble = bubble;
+    return bubble;
+  }
+
+  function onDocumentMouseOver(event) {
+    var target = event.target;
+    var mark = target && target.closest ? target.closest("mark.atm-annotation") : null;
+    if (!mark || !state.root || !state.root.contains(mark)) { return; }
+    if (annotBubble && event.relatedTarget && annotBubble.contains(event.relatedTarget)) { return; }
+    showAnnotationBubble(mark);
+  }
+
+  function onDocumentMouseOut(event) {
+    var target = event.target;
+    var mark = target && target.closest ? target.closest("mark.atm-annotation") : null;
+    if (!mark) { return; }
+    var to = event.relatedTarget;
+    if (to && (mark.contains(to) || (annotBubble && annotBubble.contains(to)))) { return; }
+    annotBubbleTimer = window.setTimeout(hideAnnotationBubble, 240);
+  }
+
+  /* --- 标注高亮：把已标注的原文片段在讲义里标出来 --------------------- */
+  function clearAnnotationMarks() {
+    if (!state.root) { return 0; }
+    var marks = state.root.querySelectorAll("mark.atm-annotation");
+    var count = marks.length;
+    Array.prototype.forEach.call(marks, function (mark) {
+      var parent = mark.parentNode;
+      if (!parent) { return; }
+      while (mark.firstChild) { parent.insertBefore(mark.firstChild, mark); }
+      parent.removeChild(mark);
+      if (parent.normalize) { parent.normalize(); }
+    });
+    return count;
+  }
+
+  // 只取「看得见」的文字：跳过已有标注、KaTeX 的无障碍 MathML（里面是 LaTeX 原文，
+  // 屏幕上看不到，会污染匹配）、以及脚本/样式。真实的坑：不跳过这些，
+  // 带公式或 Markdown 的句子就会「划不上线」。
+  var TEXT_SKIP_SELECTOR = "mark.atm-annotation, .katex-mathml, annotation, script, style";
+
+  function visibleTextNodes(rootEl) {
+    if (!rootEl) { return []; }
+    var nodes = [];
+    var walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (node) {
+        if (!node.nodeValue || !node.nodeValue.length) { return NodeFilter.FILTER_REJECT; }
+        var parent = node.parentElement;
+        if (parent && parent.closest(TEXT_SKIP_SELECTOR)) { return NodeFilter.FILTER_REJECT; }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var current = walker.nextNode();
+    while (current) {
+      nodes.push(current);
+      current = walker.nextNode();
+    }
+    return nodes;
+  }
+
+  // 把可见文字拼成「空白统一成一个空格」的版本，并保留 → 原始字符下标的映射。
+  // 带 Markdown 的段落里，模型写的换行 / 缩进在 DOM 里是 \n 与连续空格，
+  // 而选中的文字是折叠过空白的，直接用 indexOf 会找不到（这就是「划不上线」的真凶）。
+  function normalizeTextMap(nodes) {
+    var chars = [];
+    nodes.forEach(function (node, nodeIndex) {
+      var value = node.nodeValue || "";
+      for (var offset = 0; offset < value.length; offset += 1) {
+        chars.push({ nodeIndex: nodeIndex, offset: offset, ch: value.charAt(offset) });
+      }
+    });
+    var text = "";
+    var map = [];
+    var pendingSpace = -1;
+    for (var index = 0; index < chars.length; index += 1) {
+      if (/\s/.test(chars[index].ch)) {
+        if (pendingSpace < 0 && text.length > 0) { pendingSpace = index; }
+        continue;
+      }
+      if (pendingSpace >= 0) { text += " "; map.push(pendingSpace); pendingSpace = -1; }
+      text += chars[index].ch;
+      map.push(index);
+    }
+    return { text: text, map: map, chars: chars };
+  }
+
+  function wrapCharRange(prepared, nodes, startChar, endChar, annotation) {
+    var pieces = [];
+    var current = null;
+    for (var index = startChar; index <= endChar; index += 1) {
+      var info = prepared.chars[index];
+      if (!info) { continue; }
+      if (current && current.nodeIndex === info.nodeIndex && current.to === info.offset) {
+        current.to = info.offset + 1;
+      } else {
+        current = { nodeIndex: info.nodeIndex, from: info.offset, to: info.offset + 1 };
+        pieces.push(current);
+      }
+    }
+    if (!pieces.length) { return false; }
+    // 一句话可能被拆成多段（加粗 / 行内代码 / 公式各占一个节点）：💬 只在最后一段显示，
+    // 否则每个词后面都挂一个气泡，看着像乱码。
+    var lastIndex = pieces.length - 1;
+    pieces.forEach(function (piece, index) { piece.isLast = index === lastIndex; });
+    // 从后往前包：先改后面的节点，前面节点的偏移量仍然有效
+    pieces.reverse().forEach(function (piece) {
+      var node = nodes[piece.nodeIndex];
+      if (!node || !node.parentNode) { return; }
+      var range = document.createRange();
+      try {
+        range.setStart(node, piece.from);
+        range.setEnd(node, piece.to);
+        var mark = document.createElement("mark");
+        mark.className = "atm-annotation atm-annotation-" + String(annotation.color || "yellow");
+        mark.setAttribute("data-annotation-id", String(annotation.id || ""));
+        if (annotation.note && piece.isLast) {
+          mark.setAttribute("title", String(annotation.note) + "（点击可改评论 / 引用到追问）");
+          mark.setAttribute("data-has-note", "1");
+        } else {
+          mark.setAttribute("title", "点击写评论 / 引用到追问");
+        }
+        range.surroundContents(mark);
+      } catch (error) { /* 跨元素等特殊情况：跳过这一片，不影响阅读 */ }
+    });
+    return true;
+  }
+
+  function applyAnnotations() {
+    clearAnnotationMarks();
+    if (!state.root || !state.annotations.length) { return 0; }
+    // 一次性在「没有标注」的干净 DOM 上算出所有匹配范围，再统一从后往前包。
+    // 这样后一条标注即使落在前一条的范围里也能匹配上（逐条边找边包会导致后一条找不到）。
+    var nodes = visibleTextNodes(state.root);
+    if (!nodes.length) { return 0; }
+    var prepared = normalizeTextMap(nodes);
+    var matches = [];
+    state.annotations.forEach(function (annotation) {
+      var wanted = String((annotation && annotation.quote) || "").replace(/\s+/g, " ").trim();
+      if (!wanted) { return; }
+      var start = prepared.text.indexOf(wanted);
+      var length = wanted.length;
+      if (start < 0) {
+        // 兜底：整句对不上（跨段落、末尾被截断）时，退一步只划前半句，总比什么都不显示好
+        var shorter = wanted.slice(0, Math.max(8, Math.floor(wanted.length * 0.6)));
+        start = prepared.text.indexOf(shorter);
+        length = shorter.length;
+        if (start < 0) { return; }
+      }
+      var startChar = prepared.map[start];
+      var endChar = prepared.map[start + length - 1];
+      if (startChar === undefined || endChar === undefined) { return; }
+      matches.push({ annotation: annotation, startChar: startChar, endChar: endChar });
+    });
+    // 从后往前包：先改后面的，前面范围的偏移量依然有效
+    matches.sort(function (left, right) { return right.startChar - left.startChar; });
+    var applied = 0;
+    matches.forEach(function (match) {
+      if (wrapCharRange(prepared, nodes, match.startChar, match.endChar, match.annotation)) {
+        applied += 1;
+      }
+    });
+    return applied;
+  }
+
+  function setAnnotations(items) {
+    state.annotations = Array.isArray(items) ? items.filter(function (item) { return item && item.quote; }) : [];
+    return applyAnnotations();
+  }
+
+  function getAnnotations() {
+    return state.annotations.slice();
+  }
+
   window.ATM = {
     init: init,
     appendBlock: appendBlock,
@@ -645,7 +1117,14 @@
     reset: reset,
     renderFallbackMarkdown: renderFallbackMarkdown,
     setTheme: setTheme,
-    getState: getState
+    getState: getState,
+    // 人设 / 标注 / JS → Python 事件
+    setPersona: setPersona,
+    getPersona: getPersona,
+    setAnnotations: setAnnotations,
+    getAnnotations: getAnnotations,
+    drainEvents: drainEvents,
+    pushEvent: pushEvent
   };
 
   if (document.readyState === "loading") {

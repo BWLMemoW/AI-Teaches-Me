@@ -90,6 +90,9 @@ class LLMProfile(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 16384
     timeout_seconds: int = 60
+    #: 推理强度（OpenAI 兼容端点可选）；留空时由客户端按模型决定。
+    #: ``none`` 表示关闭思考，适合讲义这种「要立刻开始写」的长输出任务。
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
     proxy: str | None = None
     capabilities: Capabilities = Field(default_factory=Capabilities)
     secret_ref: str | None = None
@@ -182,6 +185,12 @@ class GenerationConfig(BaseModel):
     self_assessment_enabled: bool = True
     # 是否允许 Agent 调用工具（function calling）。默认开启；端点/模型不支持时客户端会自动降级重试
     allow_tools: bool = True
+    # 生成讲义时若这节还没指定参考课件，先提醒一次（可勾「以后不再提醒」关掉）。
+    # 关掉后未指定参考就静默走关键词自动检索。
+    ask_reference_when_missing: bool = True
+    # 建课时给总监 Agent 的资料摘要预算（字符）。资料很长时按分级摘要压缩到这个预算内，
+    # 保证「每份资料都有内容进上下文」，而不是前几份吃满、后面整份被砍掉。
+    material_summary_budget_chars: int = 24000
     svg_review: SvgReviewConfig = Field(default_factory=SvgReviewConfig)
     # §2.8：流式回调节流 30–60ms
     stream_throttle_ms: int = 40

@@ -135,8 +135,20 @@ def test_stream_chat_yields_text_and_records_reported_usage() -> None:
     assert len(completions.calls) == 1
     assert completions.calls[0]["stream"] is True
     assert completions.calls[0]["model"] == "deepseek-flash"
+    # 讲义 / 追问这类 teach 任务默认关闭思考，避免长输出还没开始就被思考吃满预算
+    assert completions.calls[0]["reasoning_effort"] == "none"
     assert usage.total()["completion_tokens"] == 8
     assert usage.total()["calls"] == 1
+
+
+def test_outline_keeps_thinking_but_explicit_effort_wins() -> None:
+    llm, completions, _ = _client(lambda n: _FakeStream([_chunk("x")]))
+
+    asyncio.run(_collect(llm, task="outline"))
+    asyncio.run(_collect(llm, task="teach", reasoning_effort="low"))
+
+    assert "reasoning_effort" not in completions.calls[0]
+    assert completions.calls[1]["reasoning_effort"] == "low"
 
 
 def test_tools_and_json_schema_are_forwarded() -> None:

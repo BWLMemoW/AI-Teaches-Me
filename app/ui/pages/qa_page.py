@@ -1,9 +1,16 @@
-"""小灶页（《项目文档》§4.16、§11.2；仅限当前课程）。"""
+"""小灶页（《项目文档》§4.16、§11.2；仅限当前课程）。
+
+M33 起与**课内追问共用同一套方案**：``ChatHistoryView`` 气泡（用户在右 / 老师在左）+
+``BlockStreamParser`` 增量解析 NDJSON + 同一套工具注册表（``agents/tooling.py``）。
+因此小灶里也能调用 ``plot_function`` / ``model_3d``、图示与检索工具，而不再把原始
+JSON 直接糊在文本框里。
+"""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import (
@@ -21,8 +28,10 @@ from PySide6.QtWidgets import (
 
 from ...core.cancel import CancellationToken
 from ...core.models import RefCard
+from ...llm.stream import BlockStreamParser
 from ...services import course_service, lesson_service
 from ...services.qa_service import CrossCourseRef, QaService
+from ..widgets.chat_drawer import ChatHistoryView
 
 
 class _Signals(QObject):
@@ -56,10 +65,20 @@ class _AskTask(QRunnable):
 class QaPage(QWidget):
     status_message = Signal(str)
 
-    def __init__(self, *, courses_dir: str | Path, agent_factory=None, thread_pool: QThreadPool | None = None, parent=None) -> None:
+    def __init__(
+        self,
+        *,
+        courses_dir: str | Path,
+        agent_factory=None,
+        thread_pool: QThreadPool | None = None,
+        tooling_factory: Callable[[Path], tuple[Any, Any] | None] | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self._courses_dir = Path(courses_dir)
         self._agent_factory = agent_factory
+        self._tooling_factory = tooling_factory
+        self._tooling: tuple[Any, Any] | None = None
         self._pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         self._signals = _Signals()
         self._signals.chunk.connect(self._on_chunk)
@@ -69,6 +88,10 @@ class QaPage(QWidget):
         self._service: QaService | None = None
         self._session_id: str | None = None
         self._lessons: list[Path] = []
+        # 流式回答状态（与 ChatDrawer 同构：新块追加、未收完的一行原地刷新）
+        self._parser = BlockStreamParser()
+        self._current_bubble = None
+        self._rendered_blocks = 0
 
         layout = QVBoxLayout(self)
         title = QLabel("小灶 · 课内自由答疑")
@@ -112,8 +135,9 @@ class QaPage(QWidget):
         body.addLayout(left, 2)
 
         right = QVBoxLayout()
-        self.history = QPlainTextEdit()
-        self.history.setReadOnly(True)
+        self.history = ChatHistoryView()  # 与课内追问同一套气泡视图（M33）
+        self.history.empty_hint.setText("还没有答疑记录：先在左边新建会话、添加引用，然后在下面提问。")
+        self.history.diagram_requested.connect(self._open_diagram)
         right.addWidget(self.history, 1)
         self.input_edit = QPlainTextEdit()
         self.input_edit.setFixedHeight(72)
@@ -159,7 +183,7 @@ class QaPage(QWidget):
         self._service = None
         self._session_id = None
         self.ref_list.clear()
-        self.history.clear()
+        self.history.clear_bubbles()
         self.session_list.clear()
         self._lessons = []
         self.ref_lesson_combo.clear()
@@ -170,6 +194,13 @@ class QaPage(QWidget):
         course_id = str(meta.get("id") or course_dir.name)
         agent = self._agent_factory() if self._agent_factory else None
         self._service = QaService(session_path=course_dir / "qa" / "sessions.jsonl", course_id=course_id, agent=agent)
+        # 与课内追问共用同一套工具（M33）：课程切换后重新装配，工具被禁用时静默降级为纯对话
+        self._tooling = None
+        if self._tooling_factory is not None:
+            try:
+                self._tooling = self._tooling_factory(course_dir)
+            except Exception as exc:  # noqa: BLE001 - 工具装配失败不该挡住答疑
+                self.status_message.emit(f"工具不可用，已退回纯对话：{exc}")
         for chapter in course_service.lesson_tree(course_dir):
             for lesson in chapter["lessons"]:
                 if lesson.get("path"):
@@ -219,11 +250,56 @@ class QaPage(QWidget):
     def _reload_history(self) -> None:
         if self._service is None or self._session_id is None:
             return
-        self.history.clear()
+        self.history.clear_bubbles()
+        self._parser = BlockStreamParser()
+        self._current_bubble = None
+        self._rendered_blocks = 0
+        refs = {str(item.get("id")): str(item.get("excerpt") or "") for item in self._service.refs(self._session_id)}
         for record in self._service.messages(self._session_id):
-            role = "我" if record.get("role") == "user" else "老师"
-            text = str(record.get("text") or record.get("md") or "")
-            self.history.appendPlainText(f"{role}：{text}\n")
+            if record.get("role") == "user":
+                quote = " ／ ".join(
+                    refs.get(str(identifier), "") for identifier in (record.get("refs") or [])
+                )
+                self.history.add_bubble(
+                    "user", str(record.get("text") or ""), quote=quote.strip(" ／")
+                )
+                continue
+            raw = str(record.get("md") or record.get("text") or "")
+            blocks = self._parse_blocks(raw)
+            if blocks:
+                self.history.add_bubble("assistant", blocks=blocks)
+            else:
+                self.history.add_bubble("assistant", raw)
+        self.history.scroll_to_bottom()
+
+    @staticmethod
+    def _parse_blocks(raw: str) -> list[dict[str, Any]]:
+        """历史记录里存的是 NDJSON 原文；能解析成块就按块渲染，否则按 Markdown。"""
+        text = str(raw or "")
+        if not text.strip().startswith("{"):
+            return []
+        parser = BlockStreamParser()
+        parser.feed(text)
+        parser.finish()
+        return [] if parser.protocol_broken else list(parser.blocks)
+
+    def _quote_text(self) -> str:
+        """把当前会话的引用卡片拼成气泡顶部的引用条。"""
+        if self._service is None or self._session_id is None:
+            return ""
+        excerpts = [str(item.get("excerpt") or "").strip() for item in self._service.refs(self._session_id)]
+        return " ／ ".join(item for item in excerpts if item)
+
+    def _open_diagram(self, payload: dict) -> None:
+        """双击气泡里的图 → 放大（与追问抽屉同一入口）。"""
+        from ..widgets.diagram_dialog import view_diagram
+
+        view_diagram(
+            svg=str(payload.get("svg") or "") or None,
+            pixmap=payload.get("pixmap"),
+            title=str(payload.get("title") or "图示"),
+            parent=self,
+        )
 
     def _on_add_ref(self) -> None:
         if self._service is None or self._session_id is None:
@@ -255,10 +331,12 @@ class QaPage(QWidget):
             return
         self.input_edit.clear()
         refs = self._service.refs(self._session_id)
-        self.history.appendPlainText(f"我：{question}\n老师：")
+        self.history.add_bubble("user", question, quote=self._quote_text())
+        self._begin_answer()
         self._token = CancellationToken()
         service = self._service
         session_id = self._session_id
+        executor, tools = self._tooling if self._tooling else (None, None)
         self._pool.start(
             _AskTask(
                 lambda: service.ask(
@@ -268,6 +346,8 @@ class QaPage(QWidget):
                     outline_summary=self._outline_summary(),
                     cancel=self._token,
                     persona_name=None,
+                    executor=executor,
+                    tools=tools,
                 ),
                 self._signals,
             )
@@ -281,17 +361,53 @@ class QaPage(QWidget):
         lines = [f"{chapter.get('id')} {chapter.get('title')}" for chapter in outline.get("chapters", [])]
         return "\n".join(lines)
 
+    # --- 流式气泡（与 ChatDrawer 同构） ---------------------------------
+    def _begin_answer(self) -> None:
+        self._parser = BlockStreamParser()
+        self._rendered_blocks = 0
+        self._current_bubble = self.history.add_bubble("assistant", "")
+        self._current_bubble.set_partial("（正在思考…）")
+
+    def _flush_blocks(self) -> None:
+        bubble = self._current_bubble
+        if bubble is None:
+            return
+        blocks = list(self._parser.blocks)
+        pending = blocks[self._rendered_blocks :]
+        for block in pending:
+            bubble.append_block(block)
+        if pending:
+            self._rendered_blocks = len(blocks)
+        bubble.set_partial(self._parser.partial_text() or "")
+        self.history.scroll_to_bottom()
+
     def _on_chunk(self, piece: str) -> None:
-        self.history.moveCursor(self.history.textCursor().MoveOperation.End)
-        self.history.insertPlainText(piece)
-        self.history.ensureCursorVisible()
+        self._parser.feed(piece)
+        self._flush_blocks()
 
     def _on_done(self, _payload: object) -> None:
-        self.history.appendPlainText("")
+        bubble = self._current_bubble
+        if bubble is not None:
+            self._parser.finish()
+            self._flush_blocks()
+            if self._parser.protocol_broken:
+                fallback = self._parser.fallback_markdown()
+                if fallback.strip():
+                    bubble.set_markdown(fallback)
+            bubble.finish_stream()
+            if not bubble.markdown.strip():
+                bubble.set_markdown("（没有拿到内容，请重试一次。）")
+        self._current_bubble = None
+        self.history.scroll_to_bottom()
         self._reload_sessions()
         self.status_message.emit("答疑完成（已写入 qa/sessions.jsonl）")
 
     def _on_failed(self, message: str) -> None:
+        bubble = self._current_bubble
+        if bubble is not None:
+            bubble.finish_stream()
+            bubble.set_markdown(f"**答疑失败：** {message}\n\n（可以直接重发这个问题，或检查设置里的模型配置。）")
+        self._current_bubble = None
         self.status_message.emit(f"答疑失败：{message}")
 
     def _save_note(self, target: str) -> None:

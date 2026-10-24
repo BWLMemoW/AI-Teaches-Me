@@ -70,15 +70,21 @@ def test_course_card_selected_state_and_activation(qtbot, tmp_path: Path) -> Non
     card.set_selected(True)
     assert "#E86A92" in card.styleSheet()  # 选中描边用主题主色
 
-    with qtbot.waitSignal(card.activated, timeout=3000):
-        from PySide6.QtCore import QPoint, Qt as QtConst
-        from PySide6.QtGui import QMouseEvent
+    from PySide6.QtCore import QPoint, Qt as QtConst
+    from PySide6.QtGui import QMouseEvent
 
-        event = QMouseEvent(
-            QMouseEvent.Type.MouseButtonPress, QPoint(5, 5), QtConst.MouseButton.LeftButton,
-            QtConst.MouseButton.LeftButton, QtConst.KeyboardModifier.NoModifier,
-        )
-        card.mousePressEvent(event)
+    press = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress, QPoint(5, 5), QtConst.MouseButton.LeftButton,
+        QtConst.MouseButton.LeftButton, QtConst.KeyboardModifier.NoModifier,
+    )
+    release = QMouseEvent(
+        QMouseEvent.Type.MouseButtonRelease, QPoint(5, 5), QtConst.MouseButton.LeftButton,
+        QtConst.MouseButton.NoButton, QtConst.KeyboardModifier.NoModifier,
+    )
+    with qtbot.assertNotEmitted(card.activated):
+        card.mousePressEvent(press)
+    with qtbot.waitSignal(card.activated, timeout=3000):
+        card.mouseReleaseEvent(release)
 
 
 def test_human_time_reads_progress() -> None:

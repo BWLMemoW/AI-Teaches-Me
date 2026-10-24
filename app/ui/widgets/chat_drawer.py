@@ -12,18 +12,21 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from html import escape
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -43,6 +46,27 @@ ROLE_PREFIX = {"user": "我：", "assistant": "老师："}
 DIAGRAM_SOURCE_WIDTH = 1040  # SVG 栅格化宽度（2× 显示宽度，保证清晰）
 DIAGRAM_DISPLAY_WIDTH = 460  # 气泡里图的显示宽度上限
 _IMAGE_CACHE: dict[str, QPixmap] = {}
+
+# 引用文本里带的本地图片路径（讲义里「💬 引用到追问」会写成「…（文件：D:\...\x.png）」）
+_ASSET_RE = re.compile(r"（文件：(.+?)）")
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+
+
+def find_local_image(text: str) -> str:
+    """从引用文本里挑出真实存在的本地图片路径（没有就返回空串）。"""
+    images = find_local_images(text)
+    return images[0] if images else ""
+
+
+def find_local_images(text: str) -> list[str]:
+    """引用文本里所有真实存在的本地图片路径（去重、保序）。"""
+    found: list[str] = []
+    for match in _ASSET_RE.finditer(str(text or "")):
+        candidate = match.group(1).strip().strip('"')
+        path = Path(candidate)
+        if path.suffix.lower() in _IMAGE_SUFFIXES and path.exists() and str(path) not in found:
+            found.append(str(path))
+    return found
 
 
 def markdown_to_html(text: str) -> str:
@@ -165,7 +189,7 @@ class _Bubble(QFrame):
 
     diagram_requested = Signal(dict)
 
-    def __init__(self, role: str, parent=None) -> None:
+    def __init__(self, role: str, parent=None, *, persona: tuple[str, str] | None = None) -> None:
         super().__init__(parent)
         self.role = role
         self.setObjectName("ChatBubble")
@@ -174,22 +198,104 @@ class _Bubble(QFrame):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(12, 9, 12, 9)
         self._layout.setSpacing(8)
+        # 表头：老师的回答标注「谁在讲」（人设）；用户气泡没有表头
+        self._header_label = QLabel()
+        self._header_label.setObjectName("ChatBubbleHeader")
+        self._header_label.setTextFormat(Qt.TextFormat.RichText)
+        self._header_label.setWordWrap(True)
+        self._header_label.setVisible(False)
+        self._layout.addWidget(self._header_label)
+        self._persona_label = ""
+        self._streaming = False
+        if persona is not None:
+            self.set_persona(*persona)
         self.markdown = ""
         self.html_parts: list[str] = []
         self._plain_parts: list[str] = []
         self._partial_label: QLabel | None = None
+        self.quote = ""
+
+    # --- 表头（人设） ---------------------------------------------------
+    def set_persona(self, name: str, avatar: str = "") -> None:
+        self._persona_label = " ".join(
+            part for part in (str(avatar or "").strip(), str(name or "").strip()) if part
+        )
+        self._refresh_header()
+
+    def _refresh_header(self, *, streaming: bool | None = None) -> None:
+        """表头只写「谁在讲」；**流式回答期间**才挂一个「正在回答」后缀（M33）。
+
+        之前后缀是常驻的，于是历史记录里的旧回答也一直显示「正在回答」。
+        """
+        if streaming is not None:
+            self._streaming = bool(streaming)
+        label = self._persona_label
+        if not label:
+            self._header_label.setVisible(False)
+            self._header_label.setText("")
+            return
+        suffix = ""
+        if self._streaming:
+            suffix = '<span style="font-size:11px; color:#8B949E;"> · 正在回答</span>'
+        self._header_label.setText(
+            f'<span style="font-size:13px; font-weight:600;">{escape(label)}</span>' + suffix
+        )
+        self._header_label.setVisible(True)
+
+    # --- 引用（标注 / 选中片段） ----------------------------------------
+    def set_quote(self, quote: str) -> None:
+        """在气泡顶部放引用区：引用的原文 + 引用到的图片缩略图（可多张）。"""
+        text = " ".join(str(quote or "").split())
+        self.quote = text
+        if not text:
+            return
+        offset = 1
+        for asset in find_local_images(text):
+            pixmap = QPixmap(asset)
+            if pixmap.isNull():
+                continue
+            thumb = _ImageLabel()
+            thumb.setObjectName("ChatBubbleImage")
+            thumb.setPixmap(
+                pixmap.scaledToWidth(
+                    min(pixmap.width(), 240), Qt.TransformationMode.SmoothTransformation
+                )
+            )
+            thumb.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            thumb.setCursor(Qt.CursorShape.PointingHandCursor)
+            thumb.setToolTip("引用的讲义图片（双击看整张）")
+            thumb.doubleClicked.connect(
+                lambda _pixmap=pixmap: self.diagram_requested.emit(
+                    {"svg": "", "pixmap": _pixmap, "title": "引用的讲义图片"}
+                )
+            )
+            self._layout.insertWidget(offset, thumb)
+            self._plain_parts.append("（引用了讲义里的一张图）")
+            offset += 1
+        label = QLabel(f"引用讲义：{text}")
+        label.setObjectName("ChatQuoteChip")
+        label.setWordWrap(True)
+        label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self._layout.insertWidget(offset, label)  # 0 是表头，引用紧随其后
+        self._plain_parts.append(f"（引用讲义：{text}）")
 
     # --- 内容 -----------------------------------------------------------
     def clear_content(self) -> None:
         while self._layout.count():
             item = self._layout.takeAt(0)
             widget = item.widget()
+            if widget is None:
+                continue
+            if widget is self._header_label:  # 表头不属于内容，清空时保留
+                continue
             if widget is not None:
                 widget.deleteLater()
+        self._layout.insertWidget(0, self._header_label)
         self.html_parts = []
         self._plain_parts = []
         self._partial_label = None
         self.markdown = ""
+        self.quote = ""
 
     def _add_html(self, html: str) -> None:
         if not html.strip():
@@ -260,6 +366,7 @@ class _Bubble(QFrame):
             label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
             self._partial_label = label
             self._layout.addWidget(label)
+            self._refresh_header(streaming=True)  # 这一轮开始流式输出
         self._partial_label.setVisible(bool(clean_text.strip()))
         self._partial_label.setText(markdown_to_html(clean_text) if clean_text.strip() else "")
 
@@ -268,6 +375,7 @@ class _Bubble(QFrame):
             self._layout.removeWidget(self._partial_label)
             self._partial_label.deleteLater()
             self._partial_label = None
+        self._refresh_header(streaming=False)
 
     def _detach_partial(self) -> None:
         if self._partial_label is not None:
@@ -300,6 +408,17 @@ class ChatHistoryView(QScrollArea):
         self._layout.setContentsMargins(10, 10, 10, 10)
         self._layout.setSpacing(10)
         self._bubbles: list[_Bubble] = []
+        self._persona: tuple[str, str] = ("老师", "")
+        # 是否"粘底"：内容变长时自动跟到底部；用户自己往上滚过就不再拽他（M37）
+        self._stick_to_bottom = True
+        # 定时器挂在控件上：控件销毁时一起销毁，避免「延后滚动」在窗口关掉后才触发
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.setInterval(0)
+        self._scroll_timer.timeout.connect(self._scroll_to_bottom_now)
+        scrollbar = self.verticalScrollBar()
+        scrollbar.valueChanged.connect(self._on_scrolled)
+        scrollbar.rangeChanged.connect(self._on_range_changed)
 
         self.empty_hint = QLabel("还没有追问记录：选中讲义里的片段提问，或在下面直接输入。")
         self.empty_hint.setProperty("role", "muted")
@@ -316,13 +435,17 @@ class ChatHistoryView(QScrollArea):
         markdown: str = "",
         *,
         blocks: Sequence[Mapping[str, Any]] | None = None,
+        quote: str = "",
     ) -> _Bubble:
-        bubble = _Bubble(role)
+        bubble = _Bubble(role, persona=self._persona if role == "assistant" else None)
         bubble.diagram_requested.connect(self.diagram_requested)
         if blocks is not None:
             bubble.set_blocks(blocks)
         else:
             bubble.set_markdown(markdown)
+        # 引用必须在内容之后：set_markdown/set_blocks 会清空内容区
+        if quote:
+            bubble.set_quote(quote)
         row = QWidget()
         box = QHBoxLayout(row)
         box.setContentsMargins(0, 0, 0, 0)
@@ -340,6 +463,18 @@ class ChatHistoryView(QScrollArea):
         self.scroll_to_bottom()
         return bubble
 
+    def set_persona(self, name: str, avatar: str = "") -> None:
+        """人设变了：已有的老师气泡表头一起更新（不用重开会话）。"""
+        self._persona = (str(name or "老师"), str(avatar or ""))
+        for bubble in self._bubbles:
+            if bubble.role == "assistant":
+                bubble.set_persona(*self._persona)
+
+    @property
+    def role_prefix(self) -> str:
+        name = self._persona[0] or "老师"
+        return f"{name}："
+
     def clear_bubbles(self) -> None:
         while self._layout.count() > 1:  # 保留末尾 stretch
             item = self._layout.takeAt(0)
@@ -347,13 +482,21 @@ class ChatHistoryView(QScrollArea):
             if widget is not None and widget is not self.empty_hint:
                 widget.deleteLater()
         self._bubbles = []
+        # ``takeAt`` 会把空提示一起摘出布局：不塞回去的话，它会停在旧位置与新气泡重叠（M35 修）
+        if self._layout.indexOf(self.empty_hint) < 0:
+            self._layout.insertWidget(0, self.empty_hint)
         self.empty_hint.setVisible(True)
 
     # --- 读取 -----------------------------------------------------------
     def toPlainText(self) -> str:  # noqa: N802 - 与旧接口保持一致
-        return "\n\n".join(
-            ROLE_PREFIX.get(bubble.role, "") + bubble.to_plain_text() for bubble in self._bubbles
-        )
+        parts: list[str] = []
+        for bubble in self._bubbles:
+            if bubble.role == "assistant":
+                prefix = self.role_prefix
+            else:
+                prefix = ROLE_PREFIX.get(bubble.role, "")
+            parts.append(prefix + bubble.to_plain_text())
+        return "\n\n".join(parts)
 
     def conversation_markdown(self) -> str:
         parts: list[str] = []
@@ -368,8 +511,27 @@ class ChatHistoryView(QScrollArea):
         return "\n\n".join(parts)
 
     def scroll_to_bottom(self) -> None:
+        """把记录区滚到底（**延到事件循环下一拍**再滚）。
+
+        刚插入的气泡还没完成布局，立刻读 ``maximum()`` 拿到的是旧值——表现就是「答案在往下长，
+        可视图停在上面，看不到最新内容」（M37 修：追问 / 小灶都受影响）。
+        """
+        self._stick_to_bottom = True
+        self._scroll_timer.start()
+
+    def _scroll_to_bottom_now(self) -> None:
         bar = self.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def _on_scrolled(self, value: int) -> None:
+        """用户自己往上滚 → 解开粘底；滚回底部 → 重新粘上。"""
+        bar = self.verticalScrollBar()
+        self._stick_to_bottom = value >= bar.maximum() - 8
+
+    def _on_range_changed(self, _minimum: int, maximum: int) -> None:
+        """内容变长（气泡长大 / 新块追加）时跟到底部。"""
+        if self._stick_to_bottom:
+            self.verticalScrollBar().setValue(maximum)
 
     # --- 布局 -----------------------------------------------------------
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
@@ -392,14 +554,26 @@ class ChatDrawer(QWidget):
     new_session_requested = Signal()
     rename_session_requested = Signal(str)
     delete_session_requested = Signal(str)
+    annotation_edit_requested = Signal(str)  # 改某条标注的备注
+    annotation_delete_requested = Signal(str)
+    annotations_clear_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setMinimumWidth(380)  # 太窄气泡换行难看（M23）
+        self._annotations: list[dict] = []
+        self._citations: list[dict] = []
         layout = QVBoxLayout(self)
+        title_row = QHBoxLayout()
         title = QLabel("追问")
         title.setProperty("role", "subtitle")
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        self.persona_hint = QLabel("")
+        self.persona_hint.setProperty("role", "muted")
+        self.persona_hint.setToolTip("当前教学人设：讲义与回答都由这个人设来表达")
+        title_row.addWidget(self.persona_hint)
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
 
         # 会话：每个小节可以有多个追问会话（M27）
         session_row = QHBoxLayout()
@@ -431,6 +605,49 @@ class ChatDrawer(QWidget):
         session_row.addWidget(self.delete_session_button)
         layout.addLayout(session_row)
 
+        # 讲义标注（划词标注）：一条标注 = 一段原文（可选备注），可一键引用到追问
+        annot_row = QHBoxLayout()
+        annot_row.setSpacing(6)
+        self.annotation_label = QLabel("讲义标注（0）")
+        self.annotation_label.setProperty("role", "muted")
+        annot_row.addWidget(self.annotation_label)
+        annot_row.addStretch(1)
+        self.cite_annotation_button = QPushButton("引用到追问")
+        self.cite_annotation_button.setProperty("role", "primary")
+        self.cite_annotation_button.setToolTip("把选中的标注原文带进下面的提问框")
+        self.cite_annotation_button.clicked.connect(lambda: self.cite_annotation(self.current_annotation()))
+        annot_row.addWidget(self.cite_annotation_button)
+        self.edit_annotation_button = QPushButton("改备注")
+        self.edit_annotation_button.setProperty("role", "ghost")
+        self.edit_annotation_button.clicked.connect(
+            lambda: self.annotation_edit_requested.emit(self.current_annotation_id())
+        )
+        annot_row.addWidget(self.edit_annotation_button)
+        self.delete_annotation_button = QPushButton("删除")
+        self.delete_annotation_button.setProperty("role", "ghost")
+        self.delete_annotation_button.clicked.connect(
+            lambda: self.annotation_delete_requested.emit(self.current_annotation_id())
+        )
+        annot_row.addWidget(self.delete_annotation_button)
+        self.clear_annotations_button = QPushButton("清空")
+        self.clear_annotations_button.setProperty("role", "ghost")
+        self.clear_annotations_button.clicked.connect(self.annotations_clear_requested.emit)
+        annot_row.addWidget(self.clear_annotations_button)
+        layout.addLayout(annot_row)
+
+        self.annotation_list = QListWidget()
+        self.annotation_list.setObjectName("AnnotationList")
+        self.annotation_list.setFixedHeight(118)
+        self.annotation_list.setToolTip("在讲义里选中文字 → 点「✏️ 标注」；双击这里 = 引用到追问")
+        self.annotation_list.itemDoubleClicked.connect(
+            lambda _item: self.cite_annotation(self.current_annotation())
+        )
+        layout.addWidget(self.annotation_list)
+        self.empty_annotation_hint = QLabel("还没有标注：在中间讲义里选中一段文字，点浮出的「✏️ 标注」。")
+        self.empty_annotation_hint.setProperty("role", "muted")
+        self.empty_annotation_hint.setWordWrap(True)
+        layout.addWidget(self.empty_annotation_hint)
+
         self.history_label = QLabel("对话记录（只读；这里只展示，不能输入）")
         self.history_label.setProperty("role", "muted")
         self.history_label.setWordWrap(True)
@@ -441,10 +658,31 @@ class ChatDrawer(QWidget):
         self.history.setMinimumHeight(240)
         layout.addWidget(self.history, 1)
 
-        self.selection_label = QLabel("未选中片段")
+        # 引用区：可以同时引用「一句话 + 一张图 + ……」，提问时一起发给老师
+        citation_row = QHBoxLayout()
+        citation_row.setSpacing(6)
+        self.selection_label = QLabel("引用（0）：可以同时引用多段文字和多张图")
         self.selection_label.setProperty("role", "muted")
         self.selection_label.setWordWrap(True)
-        layout.addWidget(self.selection_label)
+        citation_row.addWidget(self.selection_label, 1)
+        self.remove_citation_button = QPushButton("移除选中")
+        self.remove_citation_button.setProperty("role", "ghost")
+        self.remove_citation_button.clicked.connect(self.remove_current_citation)
+        citation_row.addWidget(self.remove_citation_button)
+        self.clear_selection_button = QPushButton("清空引用")
+        self.clear_selection_button.setProperty("role", "ghost")
+        self.clear_selection_button.clicked.connect(self.clear_citations)
+        citation_row.addWidget(self.clear_selection_button)
+        layout.addLayout(citation_row)
+
+        self.citation_list = QListWidget()
+        self.citation_list.setObjectName("CitationList")
+        self.citation_list.setFixedHeight(78)
+        self.citation_list.setToolTip("这些会随下一次提问一起发给老师（含每条的评论）")
+        self.citation_list.setVisible(False)
+        layout.addWidget(self.citation_list)
+        for button in (self.remove_citation_button, self.clear_selection_button):
+            button.setVisible(False)
 
         input_label = QLabel("你的追问")
         input_label.setProperty("role", "muted")
@@ -481,7 +719,88 @@ class ChatDrawer(QWidget):
         self._rendered_blocks = 0
 
     # --- 加载与写入 -----------------------------------------------------
-    selection = ""
+    # 引用区状态：每项 {"kind": "text"|"image", "quote", "note", "asset"}
+    def citations(self) -> list[dict]:
+        return [dict(item) for item in self._citations]
+
+    def citation_assets(self) -> list[str]:
+        """引用到的本地图片路径（去重、保序）。"""
+        found: list[str] = []
+        for item in self._citations:
+            asset = str(item.get("asset") or "")
+            if item.get("kind") == "image" and asset and asset not in found:
+                found.append(asset)
+        return found
+
+    def selection_text(self) -> str:
+        """引用区 → 发给老师的文本（每条的评论一起带上）。"""
+        lines: list[str] = []
+        for index, item in enumerate(self._citations, start=1):
+            quote = str(item.get("quote") or "").strip()
+            note = str(item.get("note") or "").strip()
+            if item.get("kind") == "image":
+                line = f"{index}. [图片] {quote}"
+            else:
+                line = f"{index}. 「{quote}」"
+            if note:
+                line += f"（我的评论：{note}）"
+            lines.append(line)
+        return "\n".join(lines)
+
+    @property
+    def selection(self) -> str:  # noqa: D401 - 兼容旧接口
+        return self.selection_text()
+
+    def add_citation(self, *, kind: str = "text", quote: str, note: str = "", asset: str = "") -> dict | None:
+        """往引用区加一个对象（可以同时引用多段文字、多张图）。"""
+        text = " ".join(str(quote or "").split())
+        if not text:
+            return None
+        item = {"kind": str(kind or "text"), "quote": text, "note": str(note or "").strip(), "asset": str(asset or "")}
+        for existing in self._citations:
+            if (existing["kind"], existing["quote"], existing["asset"]) == (item["kind"], item["quote"], item["asset"]):
+                if item["note"]:
+                    existing["note"] = item["note"]
+                    self._refresh_citations()
+                return existing
+        self._citations.append(item)
+        self._refresh_citations()
+        return item
+
+    def clear_citations(self) -> None:
+        self._citations = []
+        self._refresh_citations()
+
+    def remove_current_citation(self) -> None:
+        row = self.citation_list.currentRow()
+        if 0 <= row < len(self._citations):
+            self._citations.pop(row)
+            self._refresh_citations()
+
+    def _refresh_citations(self) -> None:
+        self.citation_list.clear()
+        for item in self._citations:
+            quote = str(item.get("quote") or "")
+            note = str(item.get("note") or "")
+            if item.get("kind") == "image":
+                label = f"🖼 图片：{quote[:34]}"
+            else:
+                label = f"📄 “{quote[:30]}{'…' if len(quote) > 30 else ''}”"
+            if note:
+                label += f"  · 评论：{note[:14]}"
+            row = QListWidgetItem(label)
+            row.setData(Qt.ItemDataRole.UserRole, item)
+            row.setToolTip(quote + (f"\n评论：{note}" if note else ""))
+            self.citation_list.addItem(row)
+        count = len(self._citations)
+        self.selection_label.setText(
+            f"引用（{count}）：可以同时引用多段文字和多张图" if count else "引用（0）：可以同时引用多段文字和多张图"
+        )
+        self.citation_list.setVisible(count > 0)
+        self.clear_selection_button.setVisible(count > 0)
+        self.remove_citation_button.setVisible(count > 0)
+        if count:
+            self.citation_list.setCurrentRow(0)
 
     def focus_input(self) -> None:
         """把焦点给输入框（打开小节时调用）。"""
@@ -511,9 +830,79 @@ class ChatDrawer(QWidget):
         if session_id:
             self.session_changed.emit(session_id)
 
+    # --- 讲义标注（划词 → 引用到追问） ----------------------------------
+    def set_annotations(self, items: Sequence[Mapping[str, Any]]) -> None:
+        """填充标注列表；不改变当前引用（引用由用户点「引用到追问」显式发生）。"""
+        self._annotations = [dict(item) for item in items if item.get("quote")]
+        selected = self.current_annotation_id()
+        self.annotation_list.clear()
+        for item in self._annotations:
+            quote = " ".join(str(item.get("quote") or "").split())
+            note = " ".join(str(item.get("note") or "").split())
+            label = f"“{quote[:28]}{'…' if len(quote) > 28 else ''}”"
+            if note:
+                label += f"  · 备注：{note[:16]}"
+            row = QListWidgetItem(label)
+            row.setData(Qt.ItemDataRole.UserRole, str(item.get("id") or ""))
+            row.setToolTip(quote + (f"\n备注：{note}" if note else ""))
+            self.annotation_list.addItem(row)
+        count = len(self._annotations)
+        self.annotation_label.setText(f"讲义标注（{count}）")
+        self.empty_annotation_hint.setVisible(count == 0)
+        self.annotation_list.setVisible(count > 0)
+        for index in range(self.annotation_list.count()):
+            if self.annotation_list.item(index).data(Qt.ItemDataRole.UserRole) == selected:
+                self.annotation_list.setCurrentRow(index)
+                break
+        if count and self.annotation_list.currentRow() < 0:
+            self.annotation_list.setCurrentRow(0)
+
+    def current_annotation_id(self) -> str:
+        item = self.annotation_list.currentItem()
+        return str(item.data(Qt.ItemDataRole.UserRole) or "") if item is not None else ""
+
+    def current_annotation(self) -> dict | None:
+        wanted = self.current_annotation_id()
+        if not wanted:
+            return None
+        return next((item for item in self._annotations if item.get("id") == wanted), None)
+
+    def cite_annotation(self, item: Mapping[str, Any] | None) -> bool:
+        """把一条标注引用到追问（原文 + 评论一起带过去，作为本次提问的依据）。"""
+        if not item:
+            return False
+        quote = " ".join(str(item.get("quote") or "").split())
+        if not quote:
+            return False
+        note = " ".join(str(item.get("note") or "").split())
+        self.cite_quote(quote, note=note)
+        return True
+
+    def cite_quote(self, quote: str, note: str = "", *, kind: str = "text", asset: str = "") -> None:
+        """引用一个讲义对象（一句话 / 一张图）：加进引用区，随下一次提问一起发送。"""
+        text = " ".join(str(quote or "").split())
+        if not text:
+            return
+        asset = str(asset or "") or find_local_image(text)
+        if asset and kind == "text":
+            kind = "image"  # 引用文本里带着本地图片路径 → 按「图片」引用处理，图片才会真发出去
+        self.add_citation(kind=kind, quote=text, note=note, asset=asset)
+        self.focus_input()
+
+    # --- 人设（回答必须看得出是谁在讲） --------------------------------
+    def set_persona(self, persona: Mapping[str, Any] | None) -> None:
+        name = str((persona or {}).get("name") or "老师")
+        avatar = str((persona or {}).get("avatar") or "")
+        self.history.set_persona(name, avatar)
+        self.persona_hint.setText(" · ".join(part for part in (f"{avatar} {name}".strip(), "在回答") if part))
+
     def set_selection(self, text: str) -> None:
-        self.selection = text
-        self.selection_label.setText(f"选中：{text[:60]}" if text else "未选中片段")
+        """兼容旧接口：用一段文本整体替换引用区。"""
+        self.clear_citations()
+        flat = " ".join(str(text or "").split())
+        if flat:
+            asset = find_local_image(flat)
+            self.add_citation(kind="image" if asset else "text", quote=flat, asset=asset)
 
     def clear(self) -> None:
         self.history.clear_bubbles()
@@ -521,8 +910,8 @@ class ChatDrawer(QWidget):
         self._current_bubble = None
         self._rendered_blocks = 0
 
-    def append_user(self, text: str) -> None:
-        self.history.add_bubble("user", str(text))
+    def append_user(self, text: str, quote: str = "") -> None:
+        self.history.add_bubble("user", str(text), quote=quote)
 
     def begin_answer(self) -> None:
         """开始一段回答：新建一个左侧气泡，后续内容增量追加进去。"""
@@ -579,7 +968,9 @@ class ChatDrawer(QWidget):
         self.clear()
         for record in records:
             if record.get("role") == "user":
-                self.append_user(record.get("text") or "")
+                self.append_user(
+                    record.get("text") or "", quote=str(record.get("selection") or "")
+                )
                 continue
             raw = str(record.get("md") or "")
             if raw.strip().startswith("{"):
@@ -602,5 +993,9 @@ class ChatDrawer(QWidget):
         if not question:
             return
         self.input_edit.clear()
-        self.append_user(question)
-        self.send_requested.emit(question, self.selection)
+        # 引用区里的对象（文字 / 图片，含评论）随这次提问一起发出去，气泡里也留一份
+        quoted = self.selection_text()
+        self.append_user(question, quote=quoted)
+        self.send_requested.emit(question, quoted)
+        # 发完就清空引用区：下一问重新选，避免把上次的图又带一遍
+        self.clear_citations()

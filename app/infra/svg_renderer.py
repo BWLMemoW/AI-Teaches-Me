@@ -10,10 +10,15 @@ def render_svg_png(svg_text: str, *, width: int = 820, scale: float = 2.0, backg
     if not svg_text.strip():
         return b""
     try:
-        from PySide6.QtCore import QByteArray, QSize
-        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtCore import QByteArray, QSize, Qt
+        from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter
         from PySide6.QtSvg import QSvgRenderer
     except Exception:  # noqa: BLE001 - 没有 QtSvg 就放弃渲染
+        return b""
+
+    # 没有 QGuiApplication 时 Qt 的字形引擎不可用：带 <text> 的 SVG 会直接把进程打崩
+    # （0xC0000409 快速失败，不是 Python 异常，抓不住）。这里主动退化成「渲染不了」。
+    if QGuiApplication.instance() is None:
         return b""
 
     renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
@@ -24,7 +29,9 @@ def render_svg_png(svg_text: str, *, width: int = 820, scale: float = 2.0, backg
         size = QSize(width, int(width * 0.6))
     height = max(1, int(size.height() * (width / max(1, size.width()))))
     image = QImage(int(width * scale), int(height * scale), QImage.Format.Format_ARGB32)
-    image.fill(background or "#FFFFFF00")
+    # 颜色写法是 Qt 的 "#AARRGGBB"：老的 "#FFFFFF00" 会被解析成**不透明黄**，
+    # 于是气泡 / 灯箱里的图都带上黄底。想透明就得显式用 Qt.transparent（M33 修）。
+    image.fill(QColor(str(background)) if background else Qt.GlobalColor.transparent)
     painter = QPainter(image)
     try:
         renderer.render(painter)

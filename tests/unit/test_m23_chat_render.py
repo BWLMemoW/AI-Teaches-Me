@@ -33,6 +33,24 @@ def test_answer_renders_markdown_not_raw_ndjson(qtbot) -> None:
     assert "print(1)" in plain
 
 
+def test_bubble_header_marks_streaming_only_while_running(qtbot) -> None:
+    """M33 回归：表头只在流式回答期间挂「正在回答」，历史记录里的旧回答不该一直挂着。"""
+    from app.ui.widgets.chat_drawer import ChatHistoryView
+
+    view = ChatHistoryView()
+    qtbot.addWidget(view)
+    bubble = view.add_bubble("assistant", "历史回答")
+
+    assert "老师" in bubble._header_label.text()  # noqa: SLF001 - 直接看表头文本
+    assert "正在回答" not in bubble._header_label.text()  # noqa: SLF001
+
+    bubble.set_partial("（正在思考…）")
+    assert "正在回答" in bubble._header_label.text()  # noqa: SLF001
+
+    bubble.finish_stream()
+    assert "正在回答" not in bubble._header_label.text()  # noqa: SLF001
+
+
 def test_rich_elements_are_real_html(qtbot) -> None:
     """表格/代码块必须真的是富文本元素（而不是被当成纯文本原样显示）。"""
     from app.ui.widgets.chat_drawer import ChatDrawer
@@ -269,3 +287,42 @@ def test_mermaid_block_shows_source_instead_of_disappearing(qtbot) -> None:
     assert "graph TD" in plain
     assert "A-->B" in plain
     assert "mermaid" in plain.lower()
+
+
+# --- 自动滚动（M37：答案往下长时要跟到底部） -------------------------------
+def test_history_auto_scrolls_while_streaming(qtbot) -> None:
+    """回归：以前立刻取 ``maximum()`` 拿到的是布局前的旧值，视图会停在上面看不到新内容。"""
+    from app.ui.widgets.chat_drawer import ChatHistoryView
+
+    view = ChatHistoryView()
+    view.resize(420, 200)
+    view.show()
+    qtbot.addWidget(view)
+    bubble = view.add_bubble("assistant", "")
+    for index in range(20):
+        bubble.append_block({"type": "text", "md": f"第 {index} 段内容。" * 30})
+        view.scroll_to_bottom()
+
+    bar = view.verticalScrollBar()
+    qtbot.waitUntil(lambda: bar.maximum() > 0 and bar.value() == bar.maximum(), timeout=3000)
+
+
+def test_history_stops_sticking_when_user_scrolls_up(qtbot) -> None:
+    from app.ui.widgets.chat_drawer import ChatHistoryView
+
+    view = ChatHistoryView()
+    view.resize(420, 200)
+    view.show()
+    qtbot.addWidget(view)
+    bubble = view.add_bubble("assistant", "")
+    for index in range(20):
+        bubble.append_block({"type": "text", "md": f"第 {index} 段内容。" * 30})
+    view.scroll_to_bottom()
+
+    bar = view.verticalScrollBar()
+    qtbot.waitUntil(lambda: bar.maximum() > 0, timeout=3000)
+    bar.setValue(0)  # 用户自己往上滚
+    bubble.append_block({"type": "text", "md": "新增内容" * 80})
+    qtbot.wait(100)
+
+    assert bar.value() == 0, "用户往上滚之后不该被自动拽回底部"

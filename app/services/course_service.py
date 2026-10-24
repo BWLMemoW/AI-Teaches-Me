@@ -27,6 +27,8 @@ class CourseSummary:
     completed_lessons: int = 0
     broken: bool = False
     issues: tuple[str, ...] = field(default_factory=tuple)
+    #: 虚拟文件夹 id；空字符串表示未分类（课程目录始终平铺在 Courses/ 下）
+    folder_id: str = ""
 
     @property
     def progress_ratio(self) -> float:
@@ -240,3 +242,79 @@ def set_pinned(course_dir: str | Path, pinned: bool) -> dict:
 
 def set_sort_index(course_dir: str | Path, index_value: int) -> dict:
     return update_course_meta(course_dir, sort_index=int(index_value))
+
+
+# --- 章节 / 小节指定参考（outline.json 的 source_refs） ----------------------
+def _outline_file(course_dir: str | Path) -> Path:
+    return Path(course_dir) / "outline.json"
+
+
+def _clean_refs(refs: object) -> list[str]:
+    """去空白、去重、保序（引用顺序就是提示词里的先后顺序）。"""
+    cleaned: list[str] = []
+    for item in refs or []:
+        value = str(item or "").strip()
+        if value and value not in cleaned:
+            cleaned.append(value)
+    return cleaned
+
+
+def _save_outline(course_dir: str | Path, outline: dict) -> None:
+    from ..core.paths import atomic_write_json
+
+    atomic_write_json(_outline_file(course_dir), outline)
+
+
+def reference_refs_for(course_dir: str | Path, lesson_id: str) -> dict[str, object]:
+    """一个小节实际生效的参考：小节自己指定优先，否则继承所在章。"""
+    outline = read_json(_outline_file(course_dir), default={}) or {}
+    lesson_refs: list[str] = []
+    chapter_refs: list[str] = []
+    chapter_id = ""
+    for chapter in outline.get("chapters", []) or []:
+        for lesson in chapter.get("lessons", []) or []:
+            if str(lesson.get("id") or "") != str(lesson_id or ""):
+                continue
+            chapter_id = str(chapter.get("id") or "")
+            lesson_refs = _clean_refs(lesson.get("source_refs"))
+            chapter_refs = _clean_refs(chapter.get("source_refs"))
+    effective = lesson_refs or chapter_refs
+    scope = "lesson" if lesson_refs else ("chapter" if chapter_refs else "")
+    return {
+        "lesson": lesson_refs,
+        "chapter": chapter_refs,
+        "effective": effective,
+        "scope": scope,
+        "chapter_id": chapter_id,
+    }
+
+
+def set_lesson_source_refs(course_dir: str | Path, lesson_id: str, refs: object) -> list[str]:
+    """写某个小节的参考（空列表 = 回到继承本章）。返回写入后的引用列表。"""
+    outline = read_json(_outline_file(course_dir), default={}) or {}
+    cleaned = _clean_refs(refs)
+    found = False
+    for chapter in outline.get("chapters", []) or []:
+        for lesson in chapter.get("lessons", []) or []:
+            if str(lesson.get("id") or "") == str(lesson_id or ""):
+                lesson["source_refs"] = cleaned
+                found = True
+    if not found:
+        raise KeyError(f"大纲里没有这个小节：{lesson_id}")
+    _save_outline(course_dir, outline)
+    return cleaned
+
+
+def set_chapter_source_refs(course_dir: str | Path, chapter_id: str, refs: object) -> list[str]:
+    """写某个大章的默认参考（没单独指定参考的小节继承它）。"""
+    outline = read_json(_outline_file(course_dir), default={}) or {}
+    cleaned = _clean_refs(refs)
+    found = False
+    for chapter in outline.get("chapters", []) or []:
+        if str(chapter.get("id") or "") == str(chapter_id or ""):
+            chapter["source_refs"] = cleaned
+            found = True
+    if not found:
+        raise KeyError(f"大纲里没有这一章：{chapter_id}")
+    _save_outline(course_dir, outline)
+    return cleaned

@@ -28,7 +28,7 @@
     .atm-meta { color: var(--atm-text-muted); font-size: 12px; margin-bottom: 8px; }
     /* 逐字预览的光标（M21） */
     .atm-live::after { content: "▍"; color: var(--atm-primary); animation: atm-blink 1s steps(1) infinite; }
-    @keyframes atm-blink { 50% { opacity: 0; } }    .atm-block { margin: 0 0 16px; content-visibility: auto; contain-intrinsic-size: 320px; }
+    @keyframes atm-blink { 50% { opacity: 0; } }    .atm-block { position: relative; margin: 0 0 16px; content-visibility: auto; contain-intrinsic-size: 320px; }
     [data-mode="dark"] .atm-image { filter: brightness(0.85) contrast(1.05); }
     .atm-image { cursor: zoom-in; max-width: 100%; height: auto; }
     .atm-lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); display: flex; align-items: center; justify-content: center; z-index: 50; cursor: zoom-out; }
@@ -52,14 +52,76 @@
       border: 1px solid var(--atm-border); background: var(--atm-surface);
       border-radius: var(--atm-radius-card); padding: 12px 14px;
     }
-    .atm-table { width: 100%; border-collapse: collapse; }
-    .atm-table th, .atm-table td { border: 1px solid var(--atm-border); padding: 6px 10px; text-align: left; }
-    .atm-table th { background: var(--atm-surface-alt); }
-    pre.atm-code {
-      background: var(--atm-code-bg); border: 1px solid var(--atm-border);
-      border-radius: var(--atm-radius-small); padding: 12px 14px; overflow-x: auto;
+    /* 表格：结构化 table 块与 Markdown 表格共用。表头用主题色下边线，
+       奇偶行分层，外框加圆角和轻微阴影，避免和普通段落糊在一起。 */
+    table.atm-table, .atm-text table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin: 10px 0 16px;
+      border: 1px solid var(--atm-border);
+      border-radius: var(--atm-radius-small);
+      overflow: hidden;
+      background: var(--atm-surface);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
     }
-    pre.atm-code code { font-family: var(--atm-font-code); font-size: 13px; }
+    table.atm-table th, table.atm-table td,
+    .atm-text table th, .atm-text table td {
+      padding: 9px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    table.atm-table th, .atm-text table th {
+      background: var(--atm-surface-alt);
+      color: var(--atm-text);
+      font-weight: 700;
+      border-bottom: 2px solid var(--atm-primary);
+    }
+    table.atm-table td, .atm-text table td {
+      border-bottom: 1px solid var(--atm-border);
+    }
+    table.atm-table th:not(:last-child), table.atm-table td:not(:last-child),
+    .atm-text table th:not(:last-child), .atm-text table td:not(:last-child) {
+      border-right: 1px solid var(--atm-border);
+    }
+    table.atm-table tbody tr:nth-child(even), .atm-text table tbody tr:nth-child(even) {
+      background: var(--atm-bg-soft);
+    }
+    table.atm-table tbody tr:hover, .atm-text table tbody tr:hover {
+      background: var(--atm-surface-alt);
+    }
+    table.atm-table tbody tr:last-child td, .atm-text table tbody tr:last-child td {
+      border-bottom: 0;
+    }
+    /* 代码块：Markdown 围栏（text 块内）与结构化 code 块共用同一套外观。
+       以前只给 pre.atm-code 上样式，围栏代码落成裸 <pre>，和正文糊在一起。 */
+    pre, pre.atm-code {
+      background: var(--atm-code-bg);
+      border: 1px solid var(--atm-border);
+      border-left: 4px solid var(--atm-primary);
+      border-radius: var(--atm-radius-small);
+      padding: 14px 16px;
+      overflow-x: auto;
+      line-height: 1.62;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), inset 0 0 0 1px rgba(0, 0, 0, 0.02);
+    }
+    pre code, pre.atm-code code, pre code.hljs {
+      display: block;
+      background: transparent !important;
+      border: 0 !important;
+      padding: 0 !important;
+      color: inherit;
+      font-family: var(--atm-font-code);
+      font-size: 13px;
+    }
+    :not(pre) > code {
+      background: var(--atm-code-bg);
+      border: 1px solid var(--atm-border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: var(--atm-font-code);
+      font-size: 0.9em;
+    }
     .atm-lang { color: var(--atm-text-muted); font-size: 12px; margin-bottom: 6px; }
     .atm-quiz-option { display: block; margin: 4px 0; }
     .atm-math-fallback { background: var(--atm-code-bg); padding: 0 4px; border-radius: 4px; }
@@ -72,6 +134,63 @@
     .atm-summary ul { margin: 6px 0 0 18px; }
     .atm-raw { color: var(--atm-text-muted); font-size: 12px; }
     .atm-vendor-warning { color: var(--atm-warning); font-size: 12px; margin-bottom: 12px; }
+    /* 人设徽章：讲义顶部一眼看到「谁在讲」（人设必须在正文里看得见） */
+    .atm-persona {
+      display: flex; align-items: center; gap: 10px;
+      border: 1px solid var(--atm-border); border-left: 4px solid var(--atm-primary);
+      background: var(--atm-surface-alt); border-radius: var(--atm-radius-card);
+      padding: 8px 12px; margin: 0 0 16px; font-size: 13px;
+    }
+    .atm-persona-avatar { font-size: 20px; line-height: 1; }
+    .atm-persona-body { display: flex; flex-direction: column; gap: 2px; }
+    .atm-persona-name { font-weight: 600; color: var(--atm-text); }
+    .atm-persona-note { color: var(--atm-text-dim); font-size: 12px; }
+    .atm-persona-hint { margin-left: auto; color: var(--atm-text-muted); font-size: 11px; }
+    /* 划词标注：一条明显的黄色划线（不是淡底），有评论时句尾带一个小气泡标记 */
+    mark.atm-annotation {
+      border-radius: 2px; padding: 0 1px 1px; cursor: pointer; color: inherit;
+      background-color: rgba(255, 214, 64, 0.18);
+      border-bottom: 3px solid #F2B705;
+    }
+    mark.atm-annotation:hover { background-color: rgba(255, 214, 64, 0.45); }
+    mark.atm-annotation[data-has-note="1"]::after { content: " 💬"; font-size: 0.78em; opacity: 0.85; }
+    mark.atm-annotation-green { border-bottom-color: #2F9E63; }
+    mark.atm-annotation-blue { border-bottom-color: #4C6BE0; }
+    mark.atm-annotation-pink { border-bottom-color: #E86A92; }
+    [data-mode="dark"] mark.atm-annotation { background-color: rgba(255, 214, 64, 0.14); }
+    /* 鼠标停在划线上：浮出气泡，选「评论」或「引用到追问」 */
+    .atm-annotbubble {
+      position: absolute; z-index: 70; max-width: 340px;
+      background: var(--atm-surface); border: 1px solid var(--atm-border);
+      border-left: 4px solid #F2B705; border-radius: 10px; padding: 8px 10px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.20);
+      font-family: var(--atm-font-ui); font-size: 12px;
+    }
+    .atm-annotbubble-note { color: var(--atm-text); margin-bottom: 6px; white-space: pre-wrap; }
+    .atm-annotbubble-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    /* 图片 / 图示：鼠标悬停时浮出「引用到追问」 */
+    .atm-cite-button {
+      position: absolute; top: 6px; right: 6px; z-index: 5;
+      display: none; cursor: pointer;
+      border: 1px solid var(--atm-border); border-radius: 999px;
+      background: var(--atm-surface); color: var(--atm-text-dim);
+      font-family: var(--atm-font-ui); font-size: 11px; padding: 3px 9px;
+    }
+    .atm-block[data-citable="1"]:hover > .atm-cite-button { display: inline-block; }
+    .atm-cite-button:hover { color: var(--atm-primary); border-color: var(--atm-primary); }
+    /* 划词后浮出的小工具条：标注 / 追问 */
+    .atm-annotbar {
+      position: absolute; z-index: 60; display: flex; gap: 6px;
+      background: var(--atm-surface); border: 1px solid var(--atm-border);
+      border-radius: var(--atm-radius-button); padding: 4px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    }
+    .atm-annotbar-button {
+      border: none; background: transparent; cursor: pointer;
+      color: var(--atm-text-dim); font-family: var(--atm-font-ui); font-size: 12px;
+      padding: 4px 8px; border-radius: 6px;
+    }
+    .atm-annotbar-button:hover { background: var(--atm-surface-alt); color: var(--atm-primary); }
   </style>
   <script src="vendor/markdown-it/markdown-it.min.js"></script>
   <script src="vendor/katex/katex.min.js"></script>

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.errors import ConfigError
-from ..infra import file_repository
+from ..infra.asset_store import save_versioned
 from ..infra.svg_renderer import render_svg_png
 from ..infra.svg_sanitizer import SanitizeResult, clean, is_acceptable
 
@@ -156,23 +156,10 @@ class IllustratorAgent:
     @staticmethod
     def save_asset(lesson_dir: str | Path, spec: SvgSpec, result: SvgResult, *, name: str = "diagram") -> dict[str, str]:
         """把当前版本写入 ``widgets/``；历史版本用 ``.vK.svg`` 命名（§3.3 / C-08）。"""
-        widgets = Path(lesson_dir) / "widgets"
-        widgets.mkdir(parents=True, exist_ok=True)
-        base = f"{name}-1"
-        svg_path = widgets / f"{base}.svg"
-        if svg_path.exists():
-            version = 1
-            while (widgets / f"{base}.v{version}.svg").exists():
-                version += 1
-            svg_path.rename(widgets / f"{base}.v{version}.svg")  # 历史版本用 .vK.svg（§3.3 / C-08）
-
-        file_repository.write_text(svg_path, result.svg)
-        saved = {"svg": svg_path.name}
+        payloads: dict[str, str | bytes] = {"svg": result.svg}
         if result.png:
-            png_path = widgets / f"{base}.png"
-            png_path.write_bytes(result.png)
-            saved["png"] = png_path.name
-        return saved
+            payloads["png"] = result.png
+        return save_versioned(Path(lesson_dir) / "widgets", f"{name}-1", payloads)
 
 
 class AnimatorAgent:

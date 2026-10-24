@@ -316,7 +316,12 @@ def build_services(bootstrap_result: BootstrapResult, *, store: SecretStore | No
         client=client,
         settings=SettingsService(bootstrap_result.config, workspace_root=layout.root, store=secrets, usage=usage),
         library=LibraryService(courses_dir=layout.courses, index=index),
-        outline=OutlineService(courses_dir=layout.courses, client=client, index=index),
+        outline=OutlineService(
+            courses_dir=layout.courses,
+            client=client,
+            index=index,
+            material_budget_chars=bootstrap_result.config.generation.material_summary_budget_chars,
+        ),
         course=course_service,
         lesson=lesson_service,
         search=search_service,

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
+from collections.abc import Sequence
 
 from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal, Slot
 from pathlib import Path
@@ -125,6 +127,48 @@ class _IconSignals(QObject):
     failed = Signal(str)
 
 
+class _MaterialSignals(QObject):
+    """资料预读的进度 / 确认 / 结果信号（确认要回到主线程弹窗）。"""
+
+    progress = Signal(int, dict)
+    confirm = Signal(int, int, list)
+    done = Signal(int, object)
+    failed = Signal(int, str)
+
+
+class _MaterialPreviewTask(QRunnable):
+    """在工作线程里读全看懂资料（含候选知识图识图），并生成分级摘要。"""
+
+    def __init__(
+        self, service: OutlineService, paths, *, task_id: int, workspace, cancel, vision, confirm, signals
+    ) -> None:
+        super().__init__()
+        self._task_id = int(task_id)
+        self._service = service
+        self._paths = list(paths)
+        self._workspace = workspace
+        self._cancel = cancel
+        self._vision = vision
+        self._confirm = confirm
+        self._signals = signals
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self._service.preview_materials(
+                self._paths,
+                workspace=self._workspace,
+                cancel=self._cancel,
+                on_event=lambda payload: self._signals.progress.emit(self._task_id, dict(payload)),
+                confirm=self._confirm,
+                vision=self._vision,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._signals.failed.emit(self._task_id, str(exc))
+            return
+        self._signals.done.emit(self._task_id, result)
+
+
 class _IconTask(QRunnable):
     """在工作线程里跑 AI 图标生成。"""
 
@@ -160,6 +204,19 @@ class WizardPage(QWidget):
         self._pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         self._draft: OutlineDraft | None = None
         self._material_paths: list[Path] = []
+        self._material_summary = ""
+        self._material_report: list[dict] = []
+        self._material_stats: dict = {}
+        self._material_token = CancellationToken()
+        self._material_task_id = 0
+        self._material_busy = False
+        self._material_stop_requested = False
+        self._material_confirms: dict[int, dict] = {}
+        self._material_signals = _MaterialSignals()
+        self._material_signals.progress.connect(self._on_material_progress_signal)
+        self._material_signals.confirm.connect(self._on_material_confirm_signal)
+        self._material_signals.done.connect(self._on_material_done_signal)
+        self._material_signals.failed.connect(self._on_material_failed_signal)
         self._icon_color = "#E86A92"
         self._icon_bg = "#FFF5F8"
         self._icon_svg: str | None = None
@@ -219,12 +276,26 @@ class WizardPage(QWidget):
         layout.addWidget(self.tags_edit)
 
         self.material_button = QPushButton("选择资料并解析（PDF / PPTX / DOCX / TXT / MD / 图片）")
+        self.material_button.setToolTip("可以一次选多个文件；也可以分几次追加（例如按章节分批传 PPT）")
         self.material_button.clicked.connect(self._on_pick_materials)
-        layout.addWidget(self.material_button)
+        material_row = QHBoxLayout()
+        material_row.addWidget(self.material_button, 1)
+        self.material_stop_button = QPushButton("停止识别")
+        self.material_stop_button.setProperty("role", "ghost")
+        self.material_stop_button.setToolTip("停下图片识别，已解析的正文会保留；可以之后再选资料继续")
+        self.material_stop_button.setVisible(False)
+        self.material_stop_button.clicked.connect(self._on_stop_materials)
+        material_row.addWidget(self.material_stop_button)
+        layout.addLayout(material_row)
         self.material_label = QLabel("尚未选择资料（解析结果会写进课程 materials/，并作为大纲依据）")
         self.material_label.setProperty("role", "muted")
         self.material_label.setWordWrap(True)
         layout.addWidget(self.material_label)
+        self.clear_material_button = QPushButton("清空已选资料")
+        self.clear_material_button.setProperty("role", "ghost")
+        self.clear_material_button.setVisible(False)
+        self.clear_material_button.clicked.connect(self._on_clear_materials)
+        layout.addWidget(self.clear_material_button)
 
         # 课程目标：同一批知识点，应试 / 速成 / 兴趣 / 精讲的拆法与讲法完全不同
         goal_label = QLabel("课程目标（决定大纲结构与讲解侧重）")
@@ -475,6 +546,10 @@ class WizardPage(QWidget):
         self.add_lesson_button = QPushButton("+ 小节")
         self.add_lesson_button.clicked.connect(lambda: self.outline_tree.add_lesson())
         tools.addWidget(self.add_lesson_button)
+        self.rename_button = QPushButton("重命名选中")
+        self.rename_button.setToolTip("只改章 / 小节标题，编号与预计时长会自动保留（也可双击行内改名）")
+        self.rename_button.clicked.connect(self.outline_tree.rename_selected)
+        tools.addWidget(self.rename_button)
         self.remove_button = QPushButton("删除选中")
         self.remove_button.clicked.connect(lambda: self.outline_tree.remove_selected())
         tools.addWidget(self.remove_button)
@@ -492,7 +567,7 @@ class WizardPage(QWidget):
     # --- 流程 -----------------------------------------------------------
     @Slot()
     def _on_pick_materials(self) -> None:
-        """选择资料文件并解析（解析放到后台线程，避免卡界面）。"""
+        """选择资料文件 → 后台读全看懂（文本/表格/图片/备注 + 知识图识图）→ 分级摘要。"""
         from PySide6.QtWidgets import QFileDialog
 
         files, _ = QFileDialog.getOpenFileNames(
@@ -503,30 +578,259 @@ class WizardPage(QWidget):
         )
         if not files:
             return
-        self._material_paths = [Path(item) for item in files]
-        from ...infra.sqlite_index import SqliteIndex
-        from ...services.material_service import MaterialService
-
-        workspace = self._service.courses_dir.parent
-        cache_dir = workspace / "data" / "cache" / "draft_materials"
-        index = None
-        try:
-            index = SqliteIndex(workspace / "data" / "library.db")
-            service = MaterialService(course_dir=cache_dir, index=index)
-            result = service.import_files(self._material_paths, course_id="draft")
-        except Exception as exc:  # noqa: BLE001 - 解析失败不阻塞建课
-            self.material_label.setText(f"资料解析失败：{exc}")
+        merged, added, duplicated = self._merge_material_paths(files)
+        self._material_paths = merged
+        if not added and duplicated:
+            self.status_message.emit(f"这 {duplicated} 份资料已经在列表里了，没有重复添加")
             return
-        finally:
-            if index is not None:
-                index.close()
-        parsed = len(result.parsed)
-        failed = len(result.failed)
-        summary = result.summary_for_director()
-        self._material_summary = summary
+        workspace = self._service.courses_dir.parent
+        self._material_task_id += 1
+        self._material_stop_requested = False
+        task_id = self._material_task_id
+        self._material_token = CancellationToken()
+        self._set_material_busy(True)
+        tail = f"（新增 {added} 份，另有 {duplicated} 份重复已跳过）" if duplicated else f"（新增 {added} 份）"
         self.material_label.setText(
-            f"已解析 {parsed} 份资料" + (f"，{failed} 份失败" if failed else "") + "；生成大纲时会被引用。"
+            f"正在读取 {len(self._material_paths)} 份资料{tail}…"
+            "（图片识别可以先点「停止识别」，正文不会丢）"
         )
+        self.clear_material_button.setVisible(True)
+        try:
+            task = _MaterialPreviewTask(
+                self._service,
+                self._material_paths,
+                task_id=task_id,
+                workspace=workspace,
+                cancel=self._material_token,
+                vision=None,  # 交给 OutlineService 用客户端自带的读图能力
+                confirm=lambda count, names: self._confirm_material_vision(task_id, count, names),
+                signals=self._material_signals,
+            )
+            self._pool.start(task)
+        except Exception as exc:  # noqa: BLE001 - 起线程失败也必须把按钮放回来
+            self._set_material_busy(False)
+            self.material_label.setText(f"资料读取没能启动：{exc}")
+            self.status_message.emit(f"资料读取没能启动：{exc}")
+
+    def _set_material_busy(self, busy: bool) -> None:
+        """统一维护资料按钮 / 停止按钮的互斥状态，避免任何分支漏掉恢复。"""
+        self._material_busy = bool(busy)
+        self.material_button.setEnabled(not self._material_busy)
+        self.clear_material_button.setEnabled(not self._material_busy)
+        self.material_stop_button.setVisible(self._material_busy)
+        self.material_stop_button.setEnabled(self._material_busy)
+
+    def _invalidate_material_task(self) -> None:
+        """让旧任务迟到的信号失效（线程没法强杀，但不能再改界面状态）。"""
+        self._material_task_id += 1
+        self._material_token.cancel()
+        self._material_stop_requested = False
+        for holder in list(self._material_confirms.values()):
+            holder["answer"] = False
+            holder["event"].set()
+        self._material_confirms.clear()
+        self._set_material_busy(False)
+
+    def _request_stop_material_task(self) -> None:
+        """停止但保留任务号：让工作线程把已经解析出的正文交回来，而不是整批丢掉。"""
+        self._material_token.cancel()
+        self._material_stop_requested = True
+        for holder in list(self._material_confirms.values()):
+            holder["answer"] = False
+            holder["event"].set()
+        self._material_confirms.clear()
+        self._set_material_busy(False)
+
+    @Slot()
+    def _on_stop_materials(self) -> None:
+        """停止图片识别：立刻恢复按钮，已解析的正文照常保留。"""
+        if not self._material_busy:
+            return
+        self._request_stop_material_task()
+        self.material_label.setText(
+            "正在停止识别…已解析的正文会保留，稍等一下会显示本次读到的内容。"
+        )
+        self.status_message.emit("已停止识别资料图（正文保留）")
+
+    def _merge_material_paths(self, files: Sequence[str | Path]) -> tuple[list[Path], int, int]:
+        """把本次选的文件并进已有列表（按绝对路径去重），支持"按章节分批上传"。"""
+        merged = list(self._material_paths)
+        existing = {str(item.resolve()) for item in merged if item.exists()}
+        for item in merged:
+            if not item.exists():
+                existing.add(str(item))
+        added = 0
+        duplicated = 0
+        for raw in files:
+            candidate = Path(raw)
+            try:
+                key = str(candidate.resolve())
+            except OSError:
+                key = str(candidate)
+            if key in existing:
+                duplicated += 1
+                continue
+            existing.add(key)
+            merged.append(candidate)
+            added += 1
+        return merged, added, duplicated
+
+    @Slot()
+    def _on_clear_materials(self) -> None:
+        """清空已选资料，重新挑一批（分批上传时用来纠错）。"""
+        if self._material_busy:
+            self._invalidate_material_task()
+        self._material_paths = []
+        self._material_summary = ""
+        self._material_report = []
+        self._material_stats = {}
+        self.material_label.setText("已清空资料；可以重新选择（解析结果会写进课程 materials/，并作为大纲依据）")
+        self.clear_material_button.setVisible(False)
+        self.status_message.emit("已清空已选资料")
+
+    # --- 资料预读：视觉回调 / 确认握手 / 结果落地 -------------------------
+    def _confirm_material_vision(self, task_id: int, count: int, names: list[str]) -> bool:
+        """工作线程发起、主线程弹窗：预计要识别多少张图，先问一句（可勾选连装饰图一起读）。"""
+        holder = {"answer": False, "event": threading.Event()}
+        self._material_confirms[int(task_id)] = holder
+        self._material_signals.confirm.emit(int(task_id), int(count), list(names))
+        if not holder["event"].wait(timeout=600):
+            self._material_confirms.pop(int(task_id), None)
+            return False
+        self._material_confirms.pop(int(task_id), None)
+        return {"proceed": bool(holder["answer"]), "include_all_images": bool(holder.get("include_all"))}
+
+    @Slot(int, int, list)
+    def _on_material_confirm_signal(self, task_id: int, count: int, names: list[str]) -> None:
+        if int(task_id) != self._material_task_id or self._material_stop_requested:
+            holder = self._material_confirms.get(int(task_id))
+            if holder is not None:
+                holder["answer"] = False
+                holder["event"].set()
+            return
+        self._on_material_confirm(count, names)
+
+    def _on_material_confirm(self, count: int, names: list[str]) -> None:
+        from PySide6.QtWidgets import QCheckBox, QMessageBox
+
+        from ...services.material_service import VISION_BATCH_SIZE
+
+        holder = self._material_confirms.get(self._material_task_id)
+        calls = max(1, -(-int(count) // max(1, int(VISION_BATCH_SIZE))))  # 向上取整
+        box = QMessageBox(self)
+        box.setWindowTitle("识别资料里的图")
+        box.setIcon(QMessageBox.Icon.Question)
+        preview = "、".join(names[:4]) + ("…" if len(names) > 4 else "")
+        box.setText(f"这份资料里预计有 {count} 张需要识别的图（来自：{preview}）。")
+        box.setInformativeText(
+            f"识别会调用模型读图，按每 {VISION_BATCH_SIZE} 张打包一次，约 {calls} 次调用；"
+            "装饰图（Logo / 水印 / 小图标）已尽量本地跳过。\n"
+            "不想现在花这些调用也可以先跳过，资料正文照常解析。"
+        )
+        more = QCheckBox("连装饰图一起识别")
+        box.setCheckBox(more)
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        answer = box.exec() == QMessageBox.StandardButton.Yes
+        if holder is not None:
+            holder["answer"] = answer
+            holder["include_all"] = bool(more.isChecked())
+            holder["event"].set()
+
+    @Slot(int, dict)
+    def _on_material_progress_signal(self, task_id: int, payload: dict) -> None:
+        if int(task_id) != self._material_task_id or self._material_stop_requested:
+            return
+        self._on_material_progress(payload)
+
+    @Slot(dict)
+    def _on_material_progress(self, payload: dict) -> None:
+        stage = str(payload.get("stage") or "")
+        if stage == "scan":
+            self.material_label.setText(
+                f"正在解析 {payload.get('index')}/{payload.get('total')}：{payload.get('file')}"
+            )
+        elif stage == "vision":
+            self.material_label.setText(
+                f"正在识别资料图 {payload.get('index')}/{payload.get('total')}：{payload.get('file')}"
+                "（可点「停止识别」跳过剩余的图）"
+            )
+        elif stage == "digest":
+            self.material_label.setText("图片与正文已读完，正在整理资料摘要…（这一步也可以停止）")
+
+    @Slot(int, object)
+    def _on_material_done_signal(self, task_id: int, result: object) -> None:
+        if int(task_id) != self._material_task_id:
+            return
+        stopped = self._material_stop_requested
+        self._material_stop_requested = False
+        self._on_material_ready(result)
+        stats = self._material_stats
+        if stopped or stats.get("cancelled"):
+            if stats.get("files"):
+                self.material_label.setText(
+                    self.material_label.text()
+                    + "\n（已停止：后续图片未识别；重新选同一批资料会优先用已识别缓存）"
+                )
+            else:
+                self.material_label.setText(
+                    "已停止识别资料图；还没有读进内容，可以重新选择资料（已识别的图有缓存）。"
+                )
+            self.status_message.emit("已停止识别资料图（已保留读到的正文）")
+
+    @Slot(int, str)
+    def _on_material_failed_signal(self, task_id: int, message: str) -> None:
+        if int(task_id) != self._material_task_id:
+            return
+        if self._material_stop_requested:
+            self._material_stop_requested = False
+            self._set_material_busy(False)
+            self.material_label.setText("已停止识别资料图；可以重新选择资料继续（已识别的图有缓存）。")
+            self.status_message.emit("已停止识别资料图")
+            return
+        self._on_material_failed(message)
+
+    @Slot(object)
+    def _on_material_ready(self, result: object) -> None:
+        data = dict(result or {})
+        self._material_summary = str(data.get("summary") or "")
+        self._material_report = list(data.get("report") or [])
+        self._material_stats = dict(data.get("stats") or {})
+        self._set_material_busy(False)
+        stats = self._material_stats
+        head = (
+            f"已读取 {stats.get('files', len(self._material_report))} 份资料："
+            f"{stats.get('pages', 0)} 页 / {stats.get('chunks', 0)} 段"
+            f" / 表格 {stats.get('tables', 0)} 个 / 识别资料图 {stats.get('figures_read', 0)} 张"
+            f"（跳过装饰图 {stats.get('figures_skipped', 0)} 张）"
+        )
+        if stats.get("vision_skipped"):
+            head += "；本次未做图片识别"
+        lines = [head, "生成大纲时会引用这些内容："]
+        for item in self._material_report:
+            name = str(item.get("filename") or "")
+            if str(item.get("status")) != "parsed":
+                lines.append(f"· {name}：解析失败——{item.get('error') or '原因未知'}")
+                continue
+            bits = [f"{item.get('pages', 0)} 页", f"{item.get('chunks', 0)} 段"]
+            if item.get("tables"):
+                bits.append(f"表格 {item['tables']}")
+            if item.get("images"):
+                bits.append(
+                    f"图 {item['images']}（读 {item.get('images_read', 0)}／"
+                    f"跳装饰 {item.get('images_skipped_decor', 0)}）"
+                )
+            if item.get("pages_without_text"):
+                bits.append(f"无文字页 {item['pages_without_text']}")
+            lines.append(f"· {name}：" + "，".join(bits))
+        self.material_label.setText("\n".join(lines))
+        self.status_message.emit(head)
+
+    @Slot(str)
+    def _on_material_failed(self, message: str) -> None:
+        self._set_material_busy(False)
+        self.material_label.setText(f"资料读取失败：{message}")
+        self.status_message.emit(f"资料读取失败：{message}")
 
     def _current_goals(self) -> list[str]:
         """当前选中的课程目标（可多选；一个都没选时回落到通用）。"""
@@ -645,6 +949,9 @@ class WizardPage(QWidget):
             goal_type=self._current_goal(),
             goal_types=self._current_goals(),
             tags=tags,
+            material_paths=[str(item) for item in self._material_paths],
+            material_report=list(self._material_report),
+            material_stats=dict(self._material_stats),
         )
         if self._draft.name != name:
             self.status_message.emit(f"已有同名课程，本次将创建《{self._draft.name}》")
@@ -687,6 +994,9 @@ class WizardPage(QWidget):
     @Slot()
     def _on_cancel(self) -> None:
         self._token.cancel()
+        if self._material_busy:
+            self._request_stop_material_task()
+            self.material_label.setText("正在停止识别…已解析的正文会保留。")
         self.status_message.emit("已请求停止（已生成的内容会保留）")
 
     @Slot(str)
@@ -755,6 +1065,14 @@ class WizardPage(QWidget):
         self._draft = None
         self._outline = None
         self._token = CancellationToken()
+        self._invalidate_material_task()
+        self._material_token = CancellationToken()
+        self._material_paths = []
+        self._material_summary = ""
+        self._material_report = []
+        self._material_stats = {}
+        self.material_label.setText("尚未选择资料（解析结果会写进课程 materials/，并作为大纲依据）")
+        self.clear_material_button.setVisible(False)
         self.name_edit.clear()
         self.user_outline_edit.clear()
         self.tags_edit.clear()

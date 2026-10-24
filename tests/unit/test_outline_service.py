@@ -121,6 +121,9 @@ def test_generate_and_commit_writes_full_course_structure(tmp_path: Path) -> Non
         lesson_dir = course_dir / "chapters" / "C1-第 1 章" / "lessons" / "L1-1-第 1-1 节"
         assert (lesson_dir / "lesson.json").exists()
         assert (lesson_dir / "notebook.md").exists()
+        lesson_meta = json.loads((lesson_dir / "lesson.json").read_text(encoding="utf-8"))
+        assert lesson_meta["depth"] == "inherit"
+        assert lesson_meta["persona"]["id"] == "inherit"
 
         course_meta = json.loads((course_dir / "course.json").read_text(encoding="utf-8"))
         assert course_meta["name"] == "线性代数速通"
@@ -130,6 +133,31 @@ def test_generate_and_commit_writes_full_course_structure(tmp_path: Path) -> Non
 
         assert [item["name"] for item in index.list_tags()] == ["数学"]
         assert index.list_courses()[0]["name"] == "线性代数速通"
+    finally:
+        index.close()
+
+
+def test_commit_accepts_titles_with_path_separators(tmp_path: Path) -> None:
+    """回归：大纲标题里的 ``/`` 不能把创建课程卡死，标题显示本身要原样保留。"""
+    service, _, index = _service(tmp_path, [])
+    try:
+        draft = service.new_draft("SQL 查询")
+        payload = json.loads(_outline_payload(1, 1))
+        payload["chapters"][0]["title"] = "多表查询：JOIN / 集合"
+        payload["chapters"][0]["lessons"][0]["title"] = "JOIN 家族: INNER / LEFT / RIGHT"
+        outline = CourseOutline.model_validate(payload)
+
+        result = service.commit(draft, outline)
+
+        chapter_dir = result.course_dir / "chapters" / "C1-多表查询：JOIN ／ 集合"
+        lesson_dir = (
+            chapter_dir / "lessons" / "L1-1-JOIN 家族：INNER ／ LEFT ／ RIGHT"
+        )
+        assert (lesson_dir / "lesson.json").exists()
+
+        saved = json.loads((result.course_dir / "outline.json").read_text(encoding="utf-8"))
+        assert saved["chapters"][0]["title"] == "多表查询：JOIN / 集合"
+        assert saved["chapters"][0]["lessons"][0]["title"] == "JOIN 家族: INNER / LEFT / RIGHT"
     finally:
         index.close()
 

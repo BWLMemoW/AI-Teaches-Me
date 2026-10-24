@@ -18,6 +18,9 @@ Pillow>=10.0            # 图片
 Markdown>=3.7           # 服务端 Markdown → HTML
 pygments>=2.17          # 代码高亮
 
+# 数值计算（M32：函数绘图采样 / 三维几何与曲面网格）
+numpy>=1.26
+
 # 其他
 keyring>=25.0           # 密钥安全存储（Windows DPAPI 后端）
 platformdirs>=4.0       # 跨平台目录规范

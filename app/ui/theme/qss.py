@@ -262,6 +262,28 @@ QFrame#ChatBubble[role="user"] {{
   border: 1px solid {tint(0.26)};
 }}
 QLabel#ChatBubbleText {{ background: transparent; }}
+QLabel#ChatBubbleHeader {{ background: transparent; }}
+/* 气泡里的「引用讲义」条（来自讲义标注或划词引用） */
+QLabel#ChatQuoteChip {{
+  background-color: {tint(0.10)};
+  border-left: 3px solid {c.primary};
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: {c.text_dim};
+  font-size: {small}px;
+}}
+/* 讲义标注列表：引用到追问的入口 */
+QListWidget#AnnotationList {{
+  background-color: {c.bg_soft};
+  border: 1px solid {c.border};
+  border-radius: 10px;
+}}
+/* 引用区：可以同时装多条引用（文字 / 图片） */
+QListWidget#CitationList {{
+  background-color: {tint(0.08)};
+  border: 1px solid {c.border};
+  border-radius: 10px;
+}}
 
 /* 列表 / 树 */
 QListWidget, QTreeWidget, QTreeView, QListView {{
@@ -270,6 +292,31 @@ QListWidget, QTreeWidget, QTreeView, QListView {{
   border-radius: 10px;
   padding: 4px;
   outline: none;
+}}
+/* 章节面板：收起 / 展开靠卡片边上的「凸起小标签」 */
+QWidget#ChapterCard, QWidget#PanelTabColumn, QWidget#CollapsedChapterBar {{ background: transparent; }}
+QPushButton#PanelTabButton {{
+  background-color: {tint(0.22)};
+  border: 1px solid {c.primary};
+  border-radius: 10px;
+  color: {c.primary};
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.05;
+  padding: 4px 0px;
+}}
+QPushButton#PanelTabButton:hover {{
+  background-color: {c.primary};
+  border-color: {c.primary};
+  color: #FFFFFF;
+}}
+/* 标注详情窗口里的原文块：左边一条黄色划线，呼应讲义里的标注 */
+QLabel#AnnotationQuote {{
+  background-color: {c.bg_soft};
+  border-left: 4px solid #E6B000;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: {c.text};
 }}
 QTreeWidget::item, QListView::item {{ height: 26px; border-radius: 6px; }}
 QListWidget::item:selected, QTreeWidget::item:selected, QListView::item:selected {{

@@ -103,6 +103,9 @@ class PreferencePanel(QWidget):
         self._trial_signals = _TrialSignals()
         self._trial_signals.done.connect(self._on_trial_done)
         self._trial_signals.failed.connect(lambda message: self.trial_output.setPlainText(f"试讲失败：{message}"))
+        # 装载期间不写回配置：reload() 会先 setCurrentIndex(...)，那一刻所有勾选框还是默认未勾选，
+        # 一保存就把用户的 allow_tools / 测验 / 自动配图等设置全抹成 false（M38 修的真实 bug）
+        self._loading = False
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_persona_group())
@@ -330,6 +333,13 @@ class PreferencePanel(QWidget):
 
     # --- 装载 / 保存 ----------------------------------------------------
     def reload(self) -> None:
+        self._loading = True
+        try:
+            self._reload_from_config()
+        finally:
+            self._loading = False
+
+    def _reload_from_config(self) -> None:
         config = self._service.config
         self._reload_personas(config.persona.default)
 
@@ -402,6 +412,8 @@ class PreferencePanel(QWidget):
 
     @Slot()
     def _save(self) -> None:
+        if self._loading:
+            return  # 装载期间的信号一律忽略，别让「还没填好的控件」覆盖用户设置
         config = self._service.config
         generation = config.generation
         generation.default_depth = str(self.depth_combo.currentData() or "standard")

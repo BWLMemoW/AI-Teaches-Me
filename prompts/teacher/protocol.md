@@ -19,4 +19,6 @@
 - `diagram.kind` ∈ `svg` / `mermaid` / `ascii`
 - `quiz.answer` 是选项下标（从 0 开始）
 - 文字块里的换行用 `\n` 转义，不要真的换行
+- 工具产出的视觉内容必须**原样搬运**：`plot_function` 给的 `svg`、`model_3d` 给的 `html`（已自带 CSP 头）
+  与 `svg`，只做字段搬运，不要改写、不要截断、不要重画；三维交互的 HTML 一律放 `animation` 块的 `html` 字段
 - 不要输出 `done` 之外的多余字段说明；`tokens` 可填 0

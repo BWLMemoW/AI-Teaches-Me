@@ -48,6 +48,19 @@ MAX_ESCALATED_TOKENS = 32768
 MAX_ESCALATIONS = 2
 
 
+def _image_mime(data: bytes) -> str:
+    """按文件头判断图片类型：prepare_vision_image 产出的是 JPEG，不能一律标成 PNG。"""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"GIF8"):
+        return "image/gif"
+    return "image/jpeg"
+
+
 @dataclass
 class ConnectionReport:
     """「测试连接」的结果（FR-02 / AC-04：耗时 + 模型列表 + 错误原因）。"""
@@ -113,11 +126,23 @@ class LLMClient:
         temperature: float | None = None,
         tool_sink: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
+        attempts: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[str]:
         """流式对话：逐段产出增量文本；``tool_sink`` 收集模型请求的工具调用（§4.5）。"""
         resolved = self._resolve_profile(task, profile, web_search_backend)
         api_key = self._require_api_key(resolved)
-        model_name = model or resolved.chat_model
+        default_model = resolved.vision_model if task == "vision_review" and resolved.vision_model else resolved.chat_model
+        model_name = model or default_model
+        effort = reasoning_effort or resolved.reasoning_effort
+        # DeepSeek 的思考模式会在长讲义上吃掉整段预算、迟迟不出正文。
+        # 教学 / 图示 / 读图默认关闭思考；大纲仍保留思考以保证结构质量。
+        if (
+            effort is None
+            and task in ("teach", "illustrate", "vision_review")
+            and str(resolved.chat_model or "").lower().startswith("deepseek")
+        ):
+            effort = "none"
         token = cancel if cancel is not None else CancellationToken.never()
         response_format = (
             {"type": "json_schema", "json_schema": dict(json_schema)} if json_schema else None
@@ -125,7 +150,8 @@ class LLMClient:
         budget = max_tokens or resolved.max_tokens or None
         escalations = 0
 
-        for attempt in range(1, self.max_attempts + 1):
+        max_attempts = max(1, int(attempts)) if attempts is not None else self.max_attempts
+        for attempt in range(1, max_attempts + 1):
             if token.cancelled:
                 return
             emitted = False
@@ -145,6 +171,7 @@ class LLMClient:
                     lesson_id=lesson_id,
                     agent=agent,
                     task=task,
+                    reasoning_effort=effort,
                 ):
                     emitted = True
                     yield piece
@@ -182,6 +209,7 @@ class LLMClient:
                                 lesson_id=lesson_id,
                                 agent=agent,
                                 task=task,
+                                reasoning_effort=effort,
                             ):
                                 emitted = True
                                 yield piece
@@ -189,7 +217,7 @@ class LLMClient:
                             continue
                         else:
                             return
-                if not exc.retryable or emitted or attempt >= self.max_attempts:
+                if not exc.retryable or emitted or attempt >= max_attempts:
                     raise
                 delay = min(self.backoff_base * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)
                 await self._sleep(delay)
@@ -267,6 +295,7 @@ class LLMClient:
         model: str | None = None,
         cancel: CancellationToken | None = None,
         max_bytes: int = 6 * 1024 * 1024,
+        attempts: int = 2,
     ) -> str:
         """多模态读图（默认档案 DeepSeek 自带读图，无需额外配置，AC-76）。"""
         if not image_bytes:
@@ -276,17 +305,20 @@ class LLMClient:
         import base64
 
         data = base64.b64encode(image_bytes).decode("ascii")
+        mime = _image_mime(image_bytes)
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}},
                 ],
             }
         ]
         parts: list[str] = []
-        async for piece in self.stream_chat(messages, task=task, model=model, cancel=cancel):
+        async for piece in self.stream_chat(
+            messages, task=task, model=model, cancel=cancel, attempts=attempts
+        ):
             parts.append(piece)
         return "".join(parts)
     # --- 内部 -----------------------------------------------------------
@@ -378,6 +410,7 @@ class LLMClient:
         lesson_id: str | None,
         agent: str | None,
         task: str,
+        reasoning_effort: str | None,
     ) -> AsyncIterator[str]:
         kwargs: dict[str, Any] = {
             "model": model_name,
@@ -392,6 +425,8 @@ class LLMClient:
             kwargs["tools"] = list(tools)
         if response_format:
             kwargs["response_format"] = dict(response_format)
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
 
         reported_usage = False
         finish_reason: str | None = None

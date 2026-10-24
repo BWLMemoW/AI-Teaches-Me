@@ -27,6 +27,19 @@ MAX_COMPONENT_LENGTH = 80
 DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 SEPARATORS = re.compile(r"[\\/]")
 TMP_SUFFIX = ".tmp"
+TITLE_REPLACEMENTS = str.maketrans(
+    {
+        "/": "／",
+        "\\": "＼",
+        ":": "：",
+        "*": "＊",
+        "?": "？",
+        '"': "＂",
+        "<": "＜",
+        ">": "＞",
+        "|": "｜",
+    }
+)
 
 
 def safe_component(name: str) -> str:
@@ -49,6 +62,27 @@ def safe_component(name: str) -> str:
     if cleaned.upper().split(".")[0] in WINDOWS_RESERVED:
         raise InvalidName(f"名称是 Windows 保留名：{cleaned!r}")
     return cleaned[:MAX_COMPONENT_LENGTH]
+
+
+def safe_title_component(title: str, *, fallback: str = "未命名") -> str:
+    """把「章 / 小节标题」变成可读的目录片段。
+
+    模型很自然会写出 ``INNER / LEFT / RIGHT`` 这种标题；``safe_component`` 的职责是
+    拒绝路径穿越，直接拿标题去调它会误伤正常内容。这里只做**展示层的可读替换**：
+    半角非法字符换成全角、``..`` 换成省略号，再把结果交给 ``safe_component`` 做长度与
+    保留名校验。标题本身仍原样保存在 ``outline.json`` 里，界面显示不变。
+    """
+    text = " ".join(str(title or "").replace("\r", " ").replace("\n", " ").split())
+    text = text.translate(TITLE_REPLACEMENTS)
+    # 全角标点前后不夹半角空格，目录名更像中文标题
+    text = re.sub(r"\s+([：；，。！？])", r"\1", text)
+    text = re.sub(r"([：；，。！？])\s+", r"\1", text)
+    while ".." in text:
+        text = text.replace("..", "…")
+    try:
+        return safe_component(text)
+    except InvalidName:
+        return safe_component(fallback)
 
 
 def safe_join(root: str | Path, *parts: str) -> Path:

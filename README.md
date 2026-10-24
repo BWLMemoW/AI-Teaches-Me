@@ -1,124 +1,391 @@
-# AI Teaches Me (ATM)
+# AI Teaches Me（ATM）
 
-在 PC 桌面端运行的「AI 驱动的个性化自学平台」：配置自己的 AI API 后，由**课程总监 Agent** 把课程名 / 大纲 / 教材拆成分章分小节、细化到知识点的教学大纲，再由**教师 Agent** 针对每个小节展开有趣、带例子、可随时追问的讲解。
+> 一个运行在 Windows 桌面上的本地优先 AI 自学平台：把课程目标拆成章节和知识点，再让可配置的教师 Agent 陪你逐节学习、追问、整理笔记。
 
-## 文档
+AI Teaches Me（简称 ATM）不是“把教材丢给聊天框”的问答工具，而是一套有教学结构的桌面工作流。你可以只输入想学的主题，也可以提供大纲、PPT、PDF、DOCX 或图片；系统会生成可编辑的教学大纲，并在本地保存课程。讲义支持 Markdown、LaTeX 公式、代码高亮、矢量图示与交互式三维模型，已生成的内容可以离线阅读。
 
-| 文档 | 说明 |
-| --- | --- |
-| [docs/项目文档.md](docs/项目文档.md) | 需求、功能（FR）、验收标准（AC）、路线图与里程碑 |
-| [docs/技术文档.md](docs/技术文档.md) | 技术栈、数据存储结构、系统关系、系统交互方式 |
-| [docs/提示词.md](docs/提示词.md) | 原始需求 |
+## 项目解决什么问题
 
-改动代码前请先读技术文档 §1.5（技术约束）、§3（数据存储结构）、§4（系统交互方式）。
+自学常见的困难通常不在“找不到资料”，而在于：
 
-## 开发环境
+- **缺少结构**：不知道先学什么，也不清楚学到什么程度算掌握。
+- **讲解枯燥**：教材偏抽象，缺少例子、类比和可视化。
+- **问题容易断线**：卡住以后只能另外搜索，答案脱离当前课程上下文。
+- **进度不可见**：学过什么、哪里薄弱、下一步做什么，全靠记忆。
+- **资料不受自己控制**：内容散落在网页和聊天记录中，难以离线复习与迁移。
 
-```powershell
-python -m pip install -r requirements.txt   # 或：python -m pip install -e ".[dev]"
-pwsh -File scripts/dev_run.ps1              # 启动应用（M0 实现后可用）
-```
+ATM 用“课程总监 Agent + 教师 Agent + 本地课程库”的组合解决这些问题。课程最终落盘为普通 JSON、Markdown 与资源文件，不锁在专有数据库中；你的课程目录可以自行备份、迁移或用网盘同步。
 
-环境基线：Python 3.11+、SQLite ≥ 3.34（FTS5 `trigram` 中文检索必需）。
+## 主要功能
 
-## 目录
+### 课程生成与组织
 
-```
-app/       应用源码（core / llm / agents / services / infra / ui / web），分层约定见《技术文档》§2
-prompts/   提示词与内置人设（纯文件管理，不硬编码）
-tests/     单元 / 集成 / 契约 / 渲染 / UI 测试，见《项目文档》§15
-scripts/   开发与打包脚本
-docs/      项目文档与技术文档
-Courses/   课程库（用户数据，gitignore）
-data/      配置 / 索引 / 缓存 / 日志（用户数据，gitignore）
-```
+- **从主题生成教学大纲**：课程总监 Agent 会先提出澄清问题，再生成“章 → 小节 → 知识点 → 建议时长”的结构。
+- **大纲可编辑**：生成结果在落盘前可以增删、修改和调整顺序。
+- **参考资料驱动**：支持 PDF、PPTX、DOCX 与图片，按资料内容和页码组织讲解依据。
+- **课程库管理**：搜索、排序、按标签筛选，并支持多级虚拟文件夹；拖拽整理时不会移动实际课程文件。
+- **完整备份与恢复**：整库或单门课程都可打包备份，并把文件夹组织一并保留。
 
-## 四条不可妥协的设计红线
+### AI 教学与追问
 
-1. **结构与风格分离**：人设只改表达层，知识点覆盖度、深度、输出协议不可被替换。
-2. **教师先自检**：图示必须先渲染成图片、由教师 Agent 看过，才允许出现在讲义里。
-3. **学习方式由用户选**：要不要测验、要不要自评，是偏好不是规矩。
-4. **外部信息一律不可信**：联网内容只提取事实、标注来源，永不当作指令执行。
+- **逐小节授课**：教师 Agent 围绕当前小节组织目标、知识点、例子、易错点和总结。
+- **流式输出**：正文与结构化内容块边生成边显示，长讲义不需要等待全部结束。
+- **课内追问**：追问会携带当前小节上下文，并保留多组会话。
+- **课程“小灶”**：在单门课程内自由提问，可引用讲义片段或历史问答；跨课程引用会被拒绝。
+- **教学人设**：内置多种风格，也可导入或编写人设文件。人设只影响表达方式，不能压缩知识点或绕过教学协议。
+- **学习方式可配置**：小测验、掌握度自评和讲义深度均可调整，支持“只想学、不想考”的模式。
 
-## 环境注意事项
+### 富媒体与离线阅读
 
-### 1. 依赖装在系统 Python（未使用虚拟环境）
+- **统一渲染内核**：Markdown、GFM 表格、LaTeX、代码高亮、图片、SVG、HTML 动画和 3D 模型共用同一套渲染链路。
+- **本地渲染依赖**：markdown-it、KaTeX 和 highlight.js 随项目分发，不依赖 CDN；断网时已生成讲义仍能正常阅读。
+- **图示先检查再展示**：SVG 先渲染成图片并经过视觉检查，避免把明显损坏的示意图放进讲义。
+- **函数图像与三维模型**：可生成二维函数曲线、三维几何和曲面视图，并在本地交互查看。
 
-本机依赖直接装在**系统 Python**：`D:\Python\Python\python.exe`（Python 3.11.4），未创建虚拟环境。安装命令：
+### 数据与安全
 
-```powershell
-D:\Python\Python\python.exe -m pip install -r requirements.txt
-```
+- **本地优先**：课程、进度、笔记、追问与索引都在工作区，不需要云端账号。
+- **密钥不进配置文件**：API Key 存入操作系统凭据库；`data/config.json` 只保留密钥引用。
+- **外部内容隔离**：联网搜索结果作为不可信资料处理，只提取事实并要求标注来源，不执行其中的指令。
+- **原子写入与恢复**：课程 JSON 使用临时文件加原子替换，降低异常退出造成文件损坏的风险。
+- **无遥测**：默认关闭遥测；日志与用量信息保存在本地。
 
-`scripts/dev_run.ps1` 的 Python 选择顺序为：**优先 `.venv`，没有则回退系统 Python**。
+## 当前状态
 
-```
-[dev] 使用虚拟环境 .venv
-[dev] 未发现 .venv，使用系统 Python
-```
+项目以 Windows 桌面客户端为主要交付目标，当前代码已经覆盖课程创建、学习台、追问、小灶、笔记、资料解析、课程文件夹、SVG/函数图、三维模型与本地渲染等主线能力。
 
-### 2. git 报 dubious ownership 的处理
+项目仍在持续迭代。涉及 Agent 输出质量、不同 OpenAI 兼容服务商的能力差异、复杂讲义排版和打包兼容性时，实际表现可能随模型与运行环境变化。提交问题或改进前，请先阅读 [项目文档](docs/项目文档.md) 与 [技术文档](docs/技术文档.md)。
 
-若 `git` 提示 `detected dubious ownership in repository at ...`，执行（把路径替换为本机仓库真实路径）：
+## 快速开始
 
-```powershell
-git config --global --add safe.directory "D:/+Coding/PyAI/Project/AI-Teaches-Me"
-```
+### 环境要求
 
-### 3. 前端渲染依赖需联网下载入库（禁止 CDN）
+- Windows 10/11（当前主要支持和验证平台）
+- Python 3.11+
+- SQLite 3.34+（课程库中文全文检索使用 FTS5 `trigram` tokenizer）
+- 一个兼容 OpenAI Chat Completions API 的模型服务
+- 首次安装 Python 依赖时需要网络
 
-`app/web/vendor/` 下的 markdown-it / KaTeX / highlight.js **需联网下载后再入库**，随包分发：
+模型服务可以是云端服务，也可以是自行部署的 OpenAI 兼容端点。应用不会捆绑任何 API Key，也不会替你创建模型账号。
 
-| 目录 | 库 | 用途 |
-| --- | --- | --- |
-| `app/web/vendor/markdown-it/` | markdown-it | Markdown 到 HTML（GFM 表格 / 任务列表 / 脚注 / 删除线） |
-| `app/web/vendor/katex/` | KaTeX（含字体文件） | LaTeX 公式渲染 |
-| `app/web/vendor/highlight.js/` | highlight.js | 代码高亮 |
-
-硬约束（《技术文档》§1.5 第 4 条）：渲染资源全部本地，**禁止任何 CDN 与外链**；断网时讲义中的 Markdown、公式与代码高亮必须照常渲染。
-## 运行与自检（M0 起可用）
+### 1. 获取代码
 
 ```powershell
-# 启动应用：配置 API、测试连接、切换主题、离线阅读内置示例课程
+git clone git@github.com:BWLMemoW/AI-Teaches-Me.git
+cd AI-Teaches-Me
+```
+
+没有配置 SSH 时，也可以使用 HTTPS 地址克隆。
+
+### 2. 创建虚拟环境并安装依赖
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+如果只需要运行应用，也可以安装运行时依赖：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+`PySide6` 同时提供 Qt Widgets、QtWebEngine 和 QtSvg，因此首次安装体积较大，这是预期现象。
+
+### 3. 启动应用
+
+```powershell
 pwsh -File scripts/dev_run.ps1
-
-# 无界面自检：初始化工作区 → 切四套主题 → 装载示例课程 → 用 QtWebEngine 渲染讲义
-D:\Python\Python\python.exe -m app.main --self-check
 ```
 
-自检输出 JSON 报告，`"ok": true` 即通过；其中 `web.vendor` 三项都是 `true` 表示
-markdown-it / KaTeX / highlight.js 已从本地 vendor 正常加载（全程无网络请求）。
-
-### 前端依赖入库与校验（禁止 CDN）
+脚本会优先使用仓库内的 `.venv`，找不到时回退到系统 `python`。也可以直接运行：
 
 ```powershell
-D:\Python\Python\python.exe scripts/fetch_vendor.py         # 从 npm 官方 registry 下载并校验 sha512 后入库
-D:\Python\Python\python.exe scripts/fetch_vendor.py --check  # 只校验关键文件是否齐全
+python -m app.main
 ```
 
-### 测试
+### 4. 完成首次配置
+
+首次启动会检测是否已有可用密钥，并引导完成三步：
+
+1. **配置模型**：填写 API Base URL、模型名和 API Key，然后测试连接。
+2. **设置教学风格**：选择内置教师人设，或导入自己的角色设定。
+3. **新建或体验课程**：创建第一门课程，或先阅读无需联网的内置示例课程。
+
+也可以在“设置 → AI 供应商与密钥”中管理多个模型档案，并选择不同任务使用的模型。敏感密钥会写入系统凭据库；如果从环境变量导入，可设置：
 
 ```powershell
-D:\Python\Python\python.exe -m pytest -q                     # 全量
-D:\Python\Python\python.exe -m pytest -q -m "not ui"          # 跳过需要 Qt 的用例
+$env:OPENAI_API_KEY = "你的 API Key"
+$env:OPENAI_BASE_URL = "https://你的兼容端点/v1"
+pwsh -File scripts/dev_run.ps1
 ```
 
-## M0 已完成（出口标准见《项目文档》§16.1）
+不要把真实密钥写进仓库、脚本或 `data/config.json`。如果怀疑密钥已经泄露，请先在服务商后台吊销并重新生成。
 
-| 出口标准 | 落地位置 | 验证方式 |
-| --- | --- | --- |
-| 能配置 API 并完成一次流式对话 | `app/services/settings_service.py`、`app/llm/client.py` | `tests/unit/test_llm_client.py`、`tests/integration/test_m0_flow.py` |
-| 主题可切换 | `app/ui/theme/`（一套 token 同时产出 QSS 与 CSS 变量） | `tests/unit/test_theme.py`、`tests/unit/test_ui_m0.py` |
-| 示例课程可离线阅读 | `app/ui/assets/seed_courses/`、`app/bootstrap.py`、`app/web/` | `tests/unit/test_seed_course.py`、`tests/integration/test_m0_flow.py` |
-## 快捷打开方式（推荐）
+## 使用流程
 
-**双击桌面的「AI Teaches Me」图标即可启动**，不需要命令行：
+一次完整的学习闭环通常是：
 
-| 入口 | 位置 | 说明 |
-| --- | --- | --- |
-| 桌面快捷方式 | `AI Teaches Me.lnk`（桌面） | 双击启动；已绑定 `app/ui/assets/icons/atm.ico` 图标 |
-| 启动脚本 | 仓库根目录 `启动 AI Teaches Me.vbs` | 双击即启动，**不弹出控制台窗口**；优先用 `.venv`，否则回退系统 Python |
-| 打包版 | `dist/AI-Teaches-Me/AI-Teaches-Me.exe` | `pwsh -File scripts/build.ps1 -OneDir` 生成的免安装版本 |
+```text
+配置模型
+   │
+   ├─▶ 新建课程：课程名 + 可选大纲 / 教材
+   │       │
+   │       ├─▶ 课程总监 Agent 澄清目标
+   │       ├─▶ 生成可编辑的教学大纲
+   │       └─▶ 确认后写入本地课程库
+   │
+   ├─▶ 进入学习台：左侧章节目录 + 右侧教学区
+   │       │
+   │       ├─▶ 教师 Agent 流式讲解
+   │       ├─▶ 随时追问
+   │       ├─▶ 查看图示、公式与三维模型
+   │       └─▶ 记录进度、测验与自评
+   │
+   ├─▶ 在“小灶”中针对本课程继续答疑
+   └─▶ 生成并导出 Markdown 笔记
+```
 
-首次启动会弹出「三步开始」引导：① 配置 API → ② 新建课程 → ③ 先读内置示例课程。
-课程与配置都在工作区里，课程库页可直接「备份课程 / 恢复备份」。
+已有课程可以完全离线打开；只有生成新内容、重新讲解或使用联网搜索时才需要访问对应模型服务。
+
+## 工作区与本地数据
+
+默认工作区是仓库根目录，也可以通过 `--workspace` 或 `ATM_WORKSPACE` 指向其他目录：
+
+```powershell
+python -m app.main --workspace "D:\Learning\ATM-Workspace"
+```
+
+首次启动会自动创建以下目录：
+
+```text
+<workspace>/
+├── Courses/                 # 课程正文、讲义、进度和聊天记录
+├── personas/                # 用户导入或编辑的人设
+├── exports/                 # 导出的笔记等文件
+└── data/
+    ├── config.json          # 非敏感配置，不含 API Key
+    ├── library.db           # 课程索引与会话索引
+    ├── cache/               # 可重新生成的缓存
+    └── logs/                # 本地日志
+```
+
+这些用户数据目录已在 `.gitignore` 中排除，不会随源码提交。需要迁移或分享课程时，请使用应用内备份功能，不要直接提交 `data/`。
+
+单门课程通常包含：
+
+```text
+Courses/<课程名>/
+├── course.json              # 课程元信息
+├── outline.json             # 章、小节、知识点结构
+├── lessons/                 # 各小节讲义
+├── materials/               # 用户资料与解析产物
+├── notes/                   # Markdown 笔记
+├── progress.json            # 学习进度
+└── qa/                      # 小灶会话与引用
+```
+
+具体字段、状态枚举与迁移规则以 [技术文档](docs/技术文档.md) 为准。
+
+## 技术架构
+
+ATM 使用分层架构，UI 不直接调用模型，业务规则与模型供应商也保持解耦：
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ UI：PySide6 / Qt Widgets / QtWebEngine                      │
+│ 主窗口、课程库、创建向导、学习台、设置、主题                  │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ 信号 / 服务接口
+┌──────────────────────────▼──────────────────────────────────┐
+│ 应用服务：课程、大纲、讲义、资料、进度、笔记、备份、设置       │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ 用例编排
+┌──────────────────────────▼──────────────────────────────────┐
+│ Agent 与领域模型                                             │
+│ Director、Teacher、Illustrator、QA、工具循环、结构化内容块     │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ 基础设施适配
+┌──────────────────────────▼──────────────────────────────────┐
+│ OpenAI 兼容客户端、文件仓库、SQLite、凭据库、解析/渲染/搜索     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+核心技术：
+
+| 领域 | 技术 |
+| --- | --- |
+| 桌面界面 | PySide6 / Qt 6 |
+| 网页与富内容渲染 | QtWebEngine、markdown-it、KaTeX、highlight.js |
+| 模型接入 | OpenAI Python SDK，兼容 OpenAI API 的服务端 |
+| 文档解析 | pypdf、python-pptx、python-docx、Pillow |
+| 数据与索引 | JSON、Markdown、SQLite FTS5 |
+| 安全存储 | keyring / Windows 凭据管理器 |
+| 测试 | pytest、pytest-qt、无网络模型桩 |
+| 打包 | PyInstaller |
+
+默认配置使用 DeepSeek 兼容端点；你可以在设置中换成其他支持 OpenAI 协议的模型。讲义生成通常需要稳定的长文本输出与工具调用能力；图片理解、联网搜索等可选功能还取决于具体模型和端点是否支持对应能力。
+
+## 目录结构
+
+```text
+app/
+├── core/          # 配置、领域模型、路径安全、错误与路由
+├── llm/           # 模型客户端、流式解析与用量统计
+├── agents/        # 总监、教师、图示与答疑 Agent
+├── services/      # 课程、讲义、资料、笔记、备份等应用服务
+├── infra/         # 文件、SQLite、凭据、解析、渲染与搜索适配
+├── ui/            # Qt 主窗口、页面、控件、主题与示例课程
+└── web/           # 讲义渲染页、脚本、主题与本地第三方资源
+prompts/           # 内置提示词与人设
+tests/             # 单元、集成、UI 与无网络回归测试
+scripts/           # 开发启动、重启、资源下载与打包脚本
+docs/              # 需求、技术设计、提示词和历史交接文档
+Courses/           # 用户课程库（已忽略）
+data/              # 配置、索引、缓存和日志（已忽略）
+```
+
+## 开发
+
+改代码前建议先阅读：
+
+- [项目文档](docs/项目文档.md)：产品目标、功能需求、验收标准、里程碑和风险。
+- [技术文档](docs/技术文档.md)：分层约定、数据格式、系统交互、安全边界与扩展点。
+- [提示词说明](prompts/README.md)：提示词的目录与加载方式。
+- [移动端交接文档](docs/handoff/)：桌面端与移动端的共享契约。
+
+### 无界面自检
+
+```powershell
+python -m app.main --self-check
+```
+
+自检会初始化工作区、切换主题、装载示例课程并验证本地 Web 渲染依赖。输出 JSON 中 `"ok": true` 表示通过。只需要检查非 Web 部分时可以加 `--no-web`。
+
+### 运行测试
+
+```powershell
+# 全量测试
+python -m pytest
+
+# 跳过需要 Qt 的用例
+python -m pytest -m "not ui"
+
+# 只跑某个测试文件
+python -m pytest tests/integration/test_m0_flow.py -q
+```
+
+测试默认使用离线模型桩，不应依赖真实 API Key。新增涉及外部内容的逻辑时，应继续保证 `no_network` 测试可重复运行。
+
+### 前端本地依赖
+
+应用禁止从 CDN 加载教学资源。若 `app/web/vendor/` 中的文件缺失，可执行：
+
+```powershell
+python scripts/fetch_vendor.py
+python scripts/fetch_vendor.py --check
+```
+
+该脚本从 npm 官方 registry 下载并校验文件；正常运行时不需要联网。
+
+### Windows 快捷启动与打包
+
+仓库根目录的 `启动 AI Teaches Me.vbs` 可在不显示控制台窗口的情况下启动应用，并优先使用 `.venv` 中的 `pythonw`。也可以创建一个指向该文件的桌面快捷方式。
+
+生成免安装包：
+
+```powershell
+python -m pip install pyinstaller
+pwsh -File scripts/build.ps1 -OneDir
+```
+
+产物写入 `dist/`，该目录不会提交到 Git。打包后请在干净环境中至少验证：窗口能显示、示例课程可打开、本地渲染依赖齐全、模型配置可保存。
+
+### 开发时重启应用
+
+```powershell
+pwsh -File scripts/restart_app.ps1 -Wait
+```
+
+脚本只会停止本项目的 `app.main` 进程，然后用最新源码重新启动，不会清理其他 Python 进程。
+
+## 配置与隐私说明
+
+- API Key 默认保存在操作系统凭据库中，不会写进源码或普通配置文件。
+- 课程、日志、笔记和会话默认只保存在本机工作区。
+- 开启联网搜索后，查询内容会发送给所选搜索服务；搜索结果会作为不可信资料处理。
+- 使用第三方模型或搜索服务时，数据如何处理取决于对应服务商的条款与配置。
+- 遥测默认关闭，项目不会自动上传使用统计。
+- 分享日志、备份或问题复现材料前，请先检查其中是否包含个人课程内容、文件名或凭据引用。
+
+## 常见问题
+
+### 启动后提示未配置模型
+
+进入“设置 → AI 供应商与密钥”，填写 Base URL、模型名与 API Key，再点“测试连接”。如果端点要求不同的协议路径，请确认 Base URL 是否包含正确的 `/v1` 或其他前缀。
+
+### PowerShell 不允许激活虚拟环境
+
+可只对当前用户调整执行策略：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+也可以不激活虚拟环境，直接调用 `.\.venv\Scripts\python.exe -m app.main`。
+
+### Qt 或 QtWebEngine 启动失败
+
+确认安装的是完整 `PySide6`，而不是只安装了 `PySide6-Essentials`。先运行 `python -m app.main --self-check` 获取更具体的错误信息。
+
+### 公式、代码高亮或示例课程不显示
+
+运行：
+
+```powershell
+python scripts/fetch_vendor.py --check
+python -m app.main --self-check
+```
+
+检查输出中的 `web.vendor` 与 `web_load_ok` 字段。应用运行时不依赖外网；资源缺失应通过本地 vendor 修复。
+
+### 生成很慢、输出被截断或工具调用失败
+
+不同 OpenAI 兼容服务的流式协议、工具调用和最大输出限制并不完全一致。可以先换用支持较长上下文与工具调用的模型，或在设置中降低生成深度。提交问题时请附模型名、端点类型、错误日志中的脱敏片段和复现步骤，不要附真实 API Key。
+
+### 能否同步到云端
+
+项目本身不提供云同步或云端账号。课程目录是普通文件，你可以自行用网盘、Git 私人仓库或其他文件同步工具管理备份。同步前请先关闭应用，避免复制到写了一半的文件。
+
+## 已知边界
+
+- 当前主要面向 Windows；Linux/macOS 尚未作为正式支持平台验证。
+- 不提供在线协作、排行榜、云账号或内容交易。
+- 不训练模型，只作为 OpenAI 兼容 API 的客户端。
+- 不提供 AI 位图生图；教学示意图以 SVG 和本地渲染为主。
+- 课程生成质量与成本取决于用户选择的模型服务。
+- AI 生成内容可能出错；重要知识应以可靠资料和专业意见为准。
+
+## 参与开发
+
+欢迎通过 Issue 报告可复现的问题，或提交只聚焦单一改动的 Pull Request。提交前请：
+
+1. 阅读相关项目文档与技术约束。
+2. 不提交课程、日志、人设、API Key 或其他个人数据。
+3. 为新行为补充测试，并运行相关测试与自检。
+4. 在说明中写清问题、原因、验证方式和潜在影响。
+
+仓库目前未声明开源许可证。若要在其他项目中复用代码或资源，请先取得仓库所有者许可。
+
+## 相关文档
+
+- [项目文档：需求、验收标准与路线图](docs/项目文档.md)
+- [技术文档：架构、数据格式与系统交互](docs/技术文档.md)
+- [提示词目录说明](prompts/README.md)
+- [移动端项目状态](docs/handoff/2026-10-22-ai-teaches-me-mobile-handoff.md)
+
+---
+
+如果 ATM 帮你把“想学”真正变成了“学完”，欢迎点一个 Star，或提交你遇到的教学体验问题喵 (｡•̀ᴗ-)✧

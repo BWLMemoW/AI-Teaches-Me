@@ -7,6 +7,8 @@ UI 只拿结果。本模块**不导入 Qt**。
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import secrets
 
 from dataclasses import dataclass, field
@@ -178,6 +180,38 @@ def course_root_of(lesson_dir: str | Path) -> Path:
     return Path(lesson_dir).parents[3]
 
 
+SETTINGS_VERSION = 2
+
+
+def migrate_legacy_lesson_settings(course_dir: str | Path) -> int:
+    """把旧版自动写入的 ``standard`` / ``default-teacher`` 改为「跟随设置」。
+
+    老版本建课时无论全局偏好如何，都会固定写这两个值；结果就是每切一个小节，
+    老师与深度看起来都要重设。这里只迁移**旧版默认值**：用户手动选过的
+    ``minimal`` / ``deep`` 或其它人设一律保留。迁移只做一次，之后通过
+    ``settings_version`` 标记跳过。
+    """
+    root = Path(course_dir)
+    changed = 0
+    for path in sorted(root.glob("chapters/*/lessons/*/lesson.json")):
+        lesson = read_json(path, default={}) or {}
+        if int(lesson.get("settings_version") or 0) >= SETTINGS_VERSION:
+            continue
+        migrated = False
+        if str(lesson.get("depth") or "") == "standard":
+            lesson["depth"] = "inherit"
+            migrated = True
+        persona_id = str((lesson.get("persona") or {}).get("id") or "")
+        if persona_id in ("", "default-teacher"):
+            lesson["persona"] = {"id": "inherit", "version": 1}
+            migrated = True
+        lesson["settings_version"] = SETTINGS_VERSION
+        atomic_write_json(path, lesson)
+        if migrated:
+            changed += 1
+    return changed
+
+
 def _sync_progress(lesson_dir: Path) -> dict:
     """把小节状态汇总回课程 ``progress.json``。"""
     course_root = course_root_of(lesson_dir)
@@ -259,6 +293,7 @@ def sync_course_progress(course_dir: str | Path) -> dict:
 class GenerationOutcome:
     blocks: list[dict]
     missing_knowledge_points: list[str] = field(default_factory=list)
+    reference_missing: list[str] = field(default_factory=list)
     protocol_broken: bool = False
     fallback_markdown: str = ""
     tokens: int = 0
@@ -287,6 +322,9 @@ def append_block(lesson_dir: str | Path, block: dict) -> None:
 # 讲义是长文（五段式 + 图示 + 例子），实测 16384 会被截断；这里给足预算，
 # 追问等短任务仍用档案自己的 max_tokens。
 LESSON_MAX_TOKENS = 32768
+#: 课件覆盖补讲的上限：缺得太多说明是「整份课件没讲」这种结构问题，
+#: 硬塞一轮补讲只会产出更长的废话，不如如实报给用户。
+REFERENCE_COVERAGE_MAX_ITEMS = 12
 
 
 async def generate_script(
@@ -295,6 +333,7 @@ async def generate_script(
     teacher: Any,
     context: Mapping[str, Any],
     persona_body: str | None = None,
+    persona_label: str | None = None,
     depth: str = "standard",
     cancel: Any = None,
     executor: Any = None,
@@ -304,6 +343,7 @@ async def generate_script(
     model: str | None = None,
     revision_reason: str = "",
     coverage_rounds: int = 1,
+    reference_coverage_rounds: int = 1,
     on_block: Callable[[dict], None] | None = None,
     on_partial: Callable[[str], None] | None = None,
 ) -> GenerationOutcome:
@@ -328,6 +368,7 @@ async def generate_script(
             tools=tools,
             max_tokens=LESSON_MAX_TOKENS,
             persona_body=persona_body,
+            persona_label=persona_label,
             depth=depth,
             model=model,
             lesson_id=lesson_id,
@@ -370,7 +411,38 @@ async def generate_script(
             missing = TeacherAgent.coverage_issues(blocks, knowledge_points)
         outcome.missing_knowledge_points = missing
 
-    _bump_version(directory, model=model or "", reason=revision_reason or "首次生成", depth=depth)
+    # --- 课件覆盖自检（C）：知识点讲全了，还要看跟课件对不对得上 --------
+    if not outcome.protocol_broken:
+        digest = list(context.get("reference_digest") or [])
+        if digest:
+            missing_refs = TeacherAgent.reference_coverage_issues(blocks, digest)
+            if (
+                missing_refs
+                and reference_coverage_rounds > 0
+                and len(missing_refs) <= REFERENCE_COVERAGE_MAX_ITEMS
+            ):
+                reference_coverage_rounds -= 1
+                titles = "、".join(missing_refs)
+                parser = BlockStreamParser()
+                await consume(
+                    coverage_note=(
+                        f"上一轮讲义漏掉了这些课件内容：{titles}。请只补充讲解这些部分"
+                        "（NDJSON，继续用同一协议；需要原话可用 read_material_slice 取该页原文），"
+                        "不要重复已讲内容。"
+                    )
+                )
+                blocks.extend(parser.feed(""))
+                missing_refs = TeacherAgent.reference_coverage_issues(blocks, digest)
+            outcome.reference_missing = missing_refs
+
+    stored_depth = str((read_json(directory / "lesson.json", default={}) or {}).get("depth") or "")
+    # 「跟随设置」要一直跟着全局走；生成结束后不能把它固化成当时的档位。
+    _bump_version(
+        directory,
+        model=model or "",
+        reason=revision_reason or "首次生成",
+        depth=stored_depth if stored_depth == "inherit" else depth,
+    )
     outcome.tokens = sum(len(str(block)) for block in blocks) // 4  # 粗略估计：端点未回报真实 token
     atomic_write_text(directory / "script.md", render_script_markdown(read_json(directory / "lesson.json", default={}) or {}, blocks))
     return outcome
@@ -452,7 +524,9 @@ def chat_sessions(lesson_dir: str | Path) -> list[dict[str, Any]]:
 
     * 会话行：``{"kind":"session","id":…,"title":…,"created_at":…}``
     * 删除标记：``{"kind":"session","id":…,"deleted":true}``（追加写，不物理删）
-    * 老版本只有消息行的 ``chat.jsonl`` → 合成一个「历史追问」会话，保证不丢记录
+    * 老版本只有消息行的 ``chat.jsonl`` → 合成一个「历史追问」会话，保证不丢记录；
+      这个虚拟会话的归属判定与 :func:`load_chat` 保持一致：**没有 session 字段的老记录**与
+      **显式写成 ``chat-legacy`` 的新记录**都算它（M35 修：读写不对称会让新回答落盘后读不回来）
     """
     sessions: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -474,7 +548,8 @@ def chat_sessions(lesson_dir: str | Path) -> list[dict[str, Any]]:
             }
             continue
         if record.get("role"):
-            if not str(record.get("session") or ""):
+            record_session = str(record.get("session") or "")
+            if not record_session or record_session == LEGACY_SESSION_ID:
                 legacy_messages += 1
     if legacy_messages and LEGACY_SESSION_ID not in sessions:
         order.insert(0, LEGACY_SESSION_ID)
@@ -564,7 +639,9 @@ def load_chat(lesson_dir: str | Path, *, session_id: str | None = None) -> list[
             continue
         record_session = str(record.get("session") or "")
         if session_id == LEGACY_SESSION_ID:
-            if not record_session:
+            # 老记录没有 session 字段；新记录可能显式写成 ``chat-legacy``——两者都算这个会话。
+            # 只认前者的话，「历史追问」里新写的回答一落盘就再读不回来（界面表现为「答案消失」）。
+            if not record_session or record_session == LEGACY_SESSION_ID:
                 messages.append(record)
         elif record_session == session_id:
             messages.append(record)
@@ -605,6 +682,7 @@ async def ask_question(
     context: Mapping[str, Any],
     selection: str = "",
     persona_body: str | None = None,
+    persona_label: str | None = None,
     depth: str = "standard",
     cancel: Any = None,
     executor: Any = None,
@@ -614,6 +692,7 @@ async def ask_question(
     qa: Any = None,
     persona_name: str | None = None,
     session_id: str | None = None,
+    attachments: Sequence[Mapping[str, Any]] = (),
 ) -> AsyncIterator[str]:
     """小节内追问：携带小节上下文与选中片段，回答流式产出并追加写 ``chat.jsonl``。
 
@@ -644,17 +723,21 @@ async def ask_question(
             history=history,
             persona_name=persona_name,
             persona_body=persona_body,
+            persona_label=persona_label,
             depth=depth,
             cancel=cancel,
             executor=executor,
             tools=tools,
             lesson_id=lesson_id,
             course_id=course_id,
+            attachments=attachments,
         )
     else:
         prompt = f"学生的追问：{question}\n"
         if selection:
             prompt += f"他选中的讲义片段：{selection}\n"
+        for item in attachments:
+            prompt += f"（他引用了讲义里的一张图：{str(item.get('caption') or item.get('path') or '')}）\n"
         prompt += (
             "只回答这个问题，不要复述讲义、不要重讲本节；"
             "请用 NDJSON 回答（先 text 块给结论，最后 done 块）。"
@@ -665,6 +748,7 @@ async def ask_question(
             executor=executor,
             tools=tools,
             persona_body=persona_body,
+            persona_label=persona_label,
             depth=depth,
             lesson_id=lesson_id,
             course_id=course_id,
@@ -679,3 +763,180 @@ async def ask_question(
         {"role": "assistant", "blocks": len(blocks), "tokens": len(text) // 4, "md": text},
         session_id=session_id,
     )
+
+
+# --- 讲义标注（划词标注 → 引用到追问） -------------------------------------
+# 存储约定：每个小节一个 ``annotations.json``（人可读、可手工编辑），
+# 结构 ``{"version": 1, "items": [...]}``。标注只记录**原文片段 + 备注 + 定位提示**，
+# 不修改 script.blocks.jsonl / script.md，所以重讲、换深度都不会破坏标注。
+ANNOTATIONS_FILE_NAME = "annotations.json"
+ANNOTATION_COLORS = ("yellow", "green", "blue", "pink")
+DEFAULT_ANNOTATION_COLOR = "yellow"
+MAX_ANNOTATION_QUOTE = 600
+MAX_ANNOTATION_NOTE = 2000
+
+
+def new_annotation_id() -> str:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"an-{stamp}-{secrets.token_hex(2)}"
+
+
+def _annotations_path(lesson_dir: str | Path) -> Path:
+    return Path(lesson_dir) / ANNOTATIONS_FILE_NAME
+
+
+def _clean_color(color: str | None) -> str:
+    value = str(color or "").strip().lower()
+    return value if value in ANNOTATION_COLORS else DEFAULT_ANNOTATION_COLOR
+
+
+def load_annotations(lesson_dir: str | Path) -> list[dict[str, Any]]:
+    """读本小节的标注（按加入顺序）。文件损坏时返回空列表，不影响阅读讲义。"""
+    try:
+        store = read_json(_annotations_path(lesson_dir), default={}) or {}
+    except ValueError:  # 手改坏了 / 写到一半断电：标注丢了可以，讲义不能打不开
+        return []
+    items = store.get("items") if isinstance(store, dict) else None
+    if not isinstance(items, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        quote = str(item.get("quote") or "").strip()
+        if not quote:
+            continue
+        cleaned.append(
+            {
+                "id": str(item.get("id") or new_annotation_id()),
+                "ts": str(item.get("ts") or ""),
+                "quote": quote,
+                "note": str(item.get("note") or ""),
+                "color": _clean_color(item.get("color")),
+                "block_index": item.get("block_index"),
+                "block_type": str(item.get("block_type") or ""),
+            }
+        )
+    return cleaned
+
+
+def save_annotations(lesson_dir: str | Path, items: Sequence[Mapping[str, Any]]) -> Path:
+    """整表原子写回（标注数量是「人划的」，不会大到需要增量写）。"""
+    payload = {"version": 1, "items": [dict(item) for item in items]}
+    return atomic_write_json(_annotations_path(lesson_dir), payload)
+
+
+def add_annotation(
+    lesson_dir: str | Path,
+    *,
+    quote: str,
+    note: str = "",
+    color: str = DEFAULT_ANNOTATION_COLOR,
+    block_index: int | None = None,
+    block_type: str = "",
+) -> dict[str, Any]:
+    """新增一条标注（同一片段重复标注时合并，避免列表里出现一堆一模一样的条目）。"""
+    text = " ".join(str(quote or "").split()).strip()[:MAX_ANNOTATION_QUOTE]
+    if not text:
+        raise ValueError("标注内容不能为空")
+    items = load_annotations(lesson_dir)
+    for item in items:
+        if item["quote"] == text:
+            if note:
+                item["note"] = str(note).strip()[:MAX_ANNOTATION_NOTE]
+                save_annotations(lesson_dir, items)
+            return item
+    record = {
+        "id": new_annotation_id(),
+        "ts": now_iso(),
+        "quote": text,
+        "note": str(note or "").strip()[:MAX_ANNOTATION_NOTE],
+        "color": _clean_color(color),
+        "block_index": block_index,
+        "block_type": str(block_type or ""),
+    }
+    items.append(record)
+    save_annotations(lesson_dir, items)
+    return record
+
+
+def update_annotation(
+    lesson_dir: str | Path,
+    annotation_id: str,
+    *,
+    note: str | None = None,
+    color: str | None = None,
+) -> dict[str, Any] | None:
+    items = load_annotations(lesson_dir)
+    for item in items:
+        if item["id"] != str(annotation_id):
+            continue
+        if note is not None:
+            item["note"] = str(note).strip()[:MAX_ANNOTATION_NOTE]
+        if color is not None:
+            item["color"] = _clean_color(color)
+        save_annotations(lesson_dir, items)
+        return item
+    return None
+
+
+def delete_annotation(lesson_dir: str | Path, annotation_id: str) -> bool:
+    items = load_annotations(lesson_dir)
+    remaining = [item for item in items if item["id"] != str(annotation_id)]
+    if len(remaining) == len(items):
+        return False
+    save_annotations(lesson_dir, remaining)
+    return True
+
+
+def clear_annotations(lesson_dir: str | Path) -> int:
+    items = load_annotations(lesson_dir)
+    save_annotations(lesson_dir, [])
+    return len(items)
+
+
+def annotation_citation(item: Mapping[str, Any]) -> str:
+    """把一条标注变成喂给答疑 Agent 的引用文本。"""
+    quote = " ".join(str(item.get("quote") or "").split())
+    note = " ".join(str(item.get("note") or "").split())
+    if note:
+        return f"「{quote}」（我的批注：{note}）"
+    return f"「{quote}」"
+
+
+def annotations_markdown(lesson_dir: str | Path) -> str:
+    """标注 → Markdown 清单（供「复制全部标注」/ 笔记整理使用）。"""
+    lines: list[str] = []
+    for item in load_annotations(lesson_dir):
+        lines.append(f"- “{item['quote']}”")
+        if item.get("note"):
+            lines.append(f"  - 批注：{item['note']}")
+    return "\n".join(lines)
+
+
+# --- 引用图片到追问（把讲义里的图真的发给模型，§4.14 多模态读图） -------------
+ATTACHMENT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+MAX_ATTACHMENT_BYTES = 6 * 1024 * 1024
+
+
+def build_image_attachment(path: str | Path, *, caption: str = "") -> dict[str, Any] | None:
+    """把本地图片打包成可随追问发送的附件（data URL）。
+
+    只在文件真实存在、后缀是受支持图片、体积不超上限时才返回，否则返回 ``None``
+    ——调用方据此退回「只引用文字」，不影响提问。
+    """
+    file = Path(path)
+    try:
+        if not file.is_file() or file.suffix.lower() not in ATTACHMENT_SUFFIXES:
+            return None
+        data = file.read_bytes()
+    except OSError:
+        return None
+    if not data or len(data) > MAX_ATTACHMENT_BYTES:
+        return None
+    mime = mimetypes.guess_type(file.name)[0] or "image/png"
+    return {
+        "path": str(file),
+        "caption": str(caption or "").strip(),
+        "data_url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}",
+    }

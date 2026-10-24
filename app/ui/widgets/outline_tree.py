@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QAbstractItemView, QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QTreeWidget, QTreeWidgetItem
 
 from ...core.models import CourseOutline
 
@@ -20,7 +20,7 @@ class OutlineTreeWidget(QTreeWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setHeaderLabels(["教学大纲（双击可改名，Ctrl+↑/↓ 可拖动）"])
+        self.setHeaderLabels(["教学大纲（双击改名，或选中后点「重命名选中」；Ctrl+↑/↓ 可拖动）"])
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
@@ -94,6 +94,40 @@ class OutlineTreeWidget(QTreeWidget):
         else:
             item.parent().removeChild(item)
         self.outline_edited.emit()
+
+    def rename_selected(self) -> bool:
+        """只改标题，保留编号、时长与知识点。
+
+        双击整行内联编辑时，用户很容易顺手删掉 ``L3-2`` 或 ``（35 分钟）``；
+        这个入口用对话框只收集标题，写回时自动拼回编号与时长。
+        """
+        item = self.currentItem()
+        if item is None:
+            return False
+        if item.parent() is None:
+            data: dict[str, Any] = item.data(0, CHAPTER_ROLE) or {}
+            identifier = str(data.get("id") or item.text(0).split(" ", 1)[0])
+            title, ok = QInputDialog.getText(
+                self, "重命名章节", "新章节名：", text=self._strip_prefix(item.text(0))
+            )
+            if not ok or not title.strip():
+                return False
+            item.setText(0, f"{identifier} {title.strip()}")
+            return True
+
+        data = item.data(0, LESSON_ROLE) or {}
+        identifier = str(data.get("id") or "")
+        minutes = int(data.get("estimated_minutes") or 10)
+        title, ok = QInputDialog.getText(
+            self, "重命名小节", "新小节名：", text=self._strip_prefix(item.text(0))
+        )
+        if not ok or not title.strip():
+            return False
+        if identifier:
+            item.setText(0, f"{identifier} {title.strip()}（{minutes} 分钟）")
+        else:
+            item.setText(0, f"{title.strip()}（{minutes} 分钟）")
+        return True
 
     # --- 导出 -----------------------------------------------------------
     def to_outline(self, base: CourseOutline | None = None) -> CourseOutline:

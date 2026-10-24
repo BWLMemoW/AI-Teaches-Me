@@ -131,7 +131,7 @@ def test_settings_page_includes_preference_panel(qtbot, tmp_path: Path) -> None:
 
 
 # --- 视觉回归 -------------------------------------------------------------
-def test_course_card_hugs_content_height(qtbot, tmp_path: Path) -> None:
+def test_course_card_uses_uniform_fixed_height(qtbot, tmp_path: Path) -> None:
     bootstrap_workspace(tmp_path, store=SecretStore(backend=InMemoryBackend()), configure_file_logging=False)
     from app.services import course_service
 
@@ -140,7 +140,8 @@ def test_course_card_hugs_content_height(qtbot, tmp_path: Path) -> None:
     qtbot.addWidget(card)
 
     policy = card.sizePolicy()
-    assert policy.verticalPolicy() == QSizePolicy.Policy.Maximum  # 不被网格行拉伸（避免大块空白）
+    assert policy.verticalPolicy() == QSizePolicy.Policy.Fixed
+    assert card.height() == CourseCard.CARD_HEIGHT
 
 
 def test_tag_strip_hidden_when_no_tags(qtbot, tmp_path: Path) -> None:
@@ -325,6 +326,11 @@ def test_card_right_click_does_not_open_course(qtbot, tmp_path) -> None:
         QtConst.MouseButton.LeftButton, QtConst.KeyboardModifier.NoModifier,
     )
     card.mousePressEvent(left)
+    release = QMouseEvent(
+        QMouseEvent.Type.MouseButtonRelease, QPoint(5, 5), QtConst.MouseButton.LeftButton,
+        QtConst.MouseButton.NoButton, QtConst.KeyboardModifier.NoModifier,
+    )
+    card.mouseReleaseEvent(release)
     assert opened == [summary]
 
     card.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(5, 5), QPoint(5, 5)))
@@ -397,3 +403,44 @@ def test_sync_seed_structure_upgrades_old_course_without_touching_content(tmp_pa
     assert any("2 章 / 5 节" in note for note in notes)
     progress = json.loads((course / "progress.json").read_text(encoding="utf-8"))
     assert set(progress["lessons"]) >= {"L1-1", "L1-2", "L1-3", "L2-1", "L2-2"}
+
+
+# --- M38 回归：装载面板不许覆盖用户设置 ------------------------------------
+def test_preference_panel_reload_keeps_saved_switches(qtbot, tmp_path: Path) -> None:
+    """构造面板时不能把「还没加载的默认勾选」写回配置。
+
+    以前的顺序是：``reload()`` 先 ``depth_combo.setCurrentIndex(...)`` → 触发 ``_save()`` →
+    此刻所有勾选框都还是未勾选状态 → 把 ``allow_tools`` / 测验 / 自动配图等统统写回 false
+    （每次启动都发生一次，界面上却仍显示为勾选，工具就此静默失效）。
+    """
+    service = _service(tmp_path)
+    config = service.config
+    config.generation.allow_tools = True
+    config.generation.quiz_enabled = True
+    config.generation.auto_svg = True
+    config.generation.default_depth = "deep"
+    service.save()
+
+    panel = PreferencePanel(service, courses_dir=tmp_path / "Courses")
+    qtbot.addWidget(panel)
+
+    assert config.generation.allow_tools is True
+    assert config.generation.quiz_enabled is True
+    assert config.generation.auto_svg is True
+
+    saved = _config(tmp_path)["generation"]
+    assert saved["allow_tools"] is True, "装载面板不该把工具开关写回 false"
+    assert saved["quiz_enabled"] is True and saved["auto_svg"] is True
+    assert panel.allow_tools_check.isChecked() is True  # 界面显示与配置一致
+
+
+def test_preference_panel_still_saves_user_toggle(qtbot, tmp_path: Path) -> None:
+    """防护不能过头：用户手动改动仍要落盘。"""
+    service = _service(tmp_path)
+    panel = PreferencePanel(service, courses_dir=tmp_path / "Courses")
+    qtbot.addWidget(panel)
+
+    panel.allow_tools_check.setChecked(False)
+
+    assert service.config.generation.allow_tools is False
+    assert _config(tmp_path)["generation"]["allow_tools"] is False
